@@ -48,10 +48,17 @@ Notas:
 
 La app ahora consulta sensores e historicos desde Neon. No consulta CSV ni API Ubibot desde la UI.
 
+Arquitectura objetivo:
+- Frontend: solo lee datos desde Neon (via endpoints internos `/api/sensors`).
+- Ubibot: solo se consulta durante la sincronizacion.
+- Sincronizacion: se ejecuta periodicamente por cron y persiste en Neon.
+
 ### Variables de entorno
 
 1. `DATABASE_URL`: conexion a PostgreSQL en Neon.
 2. `UBIBOT_ACCOUNT_KEY`: clave de Ubibot para sincronizacion periodica.
+3. `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional): mapa JSON de `channel_id -> api_key` para usar `/feeds` y obtener series completas por canal.
+4. `CRON_SECRET`: secreto para proteger el endpoint `/api/cron/sync`.
 
 ### Inicializacion de base de datos
 
@@ -66,6 +73,23 @@ npm run db:sync:api
 ```
 
 Este comando actualiza catalogo de sensores y agrega/actualiza lecturas recientes en Neon.
+
+Notas de sincronizacion Ubibot:
+- Si solo usas `UBIBOT_ACCOUNT_KEY`, algunos canales pueden devolver datos parciales en `/summary` (por ejemplo solo `field4`).
+- Para obtener series completas (temperatura/humedad/voltaje/etc.) configura `UBIBOT_CHANNEL_API_KEYS_JSON` con la `api_key` de cada canal.
+- El script intenta primero `/feeds` con `api_key` por canal y, si no existe o falla, hace fallback a `/summary`.
+
+### Cron en Vercel
+
+El proyecto incluye `vercel.json` para ejecutar `GET /api/cron/sync` cada 10 minutos.
+
+1. Configura en Vercel las variables de entorno:
+	- `DATABASE_URL`
+	- `UBIBOT_ACCOUNT_KEY`
+	- `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
+	- `CRON_SECRET`
+2. Vercel invocara automaticamente el endpoint cron.
+3. El endpoint requiere header `Authorization: Bearer <CRON_SECRET>`.
 
 ### Operacion sugerida
 

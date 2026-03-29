@@ -114,19 +114,22 @@ export async function getSensorReadingsByRange({ sensorId, hours, month }) {
     const safeHours = Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : 24;
     whereSql = `
       AND observed_at >= (
-        COALESCE(
-          (
-            SELECT MAX(observed_at)
+        CASE
+          WHEN EXISTS (
+            SELECT 1
             FROM sensor_readings
             WHERE sensor_id = $1
-              AND source <> 'api_last'
-          ),
-          (
-            SELECT MAX(observed_at)
-            FROM sensor_readings
-            WHERE sensor_id = $1
+              AND observed_at >= NOW() - make_interval(hours => $2::int)
+          ) THEN NOW()
+          ELSE COALESCE(
+            (
+              SELECT MAX(observed_at)
+              FROM sensor_readings
+              WHERE sensor_id = $1
+            ),
+            NOW()
           )
-        )
+        END
       ) - make_interval(hours => $2::int)
     `;
     params = [sensorId, safeHours];
