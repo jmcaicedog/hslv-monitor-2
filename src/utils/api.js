@@ -1,33 +1,31 @@
 export async function fetchSensorsData() {
-  const response = await fetch(
-    `https://webapi.ubibot.com/channels?account_key=${process.env.NEXT_PUBLIC_UBIBOT_KEY}`
-  );
+  const response = await fetch("/api/sensors", { cache: "no-store" });
 
   if (!response.ok) {
-    throw new Error("Error al obtener los datos de la API");
+    throw new Error("Error al obtener los datos de sensores");
   }
 
   const data = await response.json();
+  return data.sensors || [];
+}
 
-  return data.channels.map((channel) => {
-    let sensorData = {};
-    try {
-      sensorData = JSON.parse(channel.last_values); // Convierte la cadena en un objeto JSON
-    } catch (error) {
-      console.error("Error al parsear last_values:", error);
-    }
+export async function fetchSensorReadings(sensorId, options = {}) {
+  const params = new URLSearchParams();
 
-    return {
-      id: channel.channel_id,
-      title: channel.name,
-      description: channel.description,
-      temperature: sensorData.field1?.value ?? "N/A",
-      humidity: sensorData.field2?.value ?? "N/A",
-      voltage: sensorData.field3?.value ?? "N/A",
-      pressure: sensorData.field9?.value ?? null, // Presión atmosférica si existe
-      light: sensorData.field6?.value ?? null, // Luz si existe
-      createdAt: sensorData.field1?.created_at ?? "N/A",
-      status: channel.net,
-    };
-  });
+  if (options.month) {
+    params.set("month", options.month);
+  } else {
+    params.set("hours", String(options.hours || 24));
+  }
+
+  const response = await fetch(
+    `/api/sensors/${sensorId}/readings?${params.toString()}`,
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw new Error("Error al obtener historico del sensor");
+  }
+
+  return response.json();
 }

@@ -16,6 +16,10 @@ export default function AuthErrorPage() {
       "⚠️ Acceso denegado: Tu correo no está autorizado para ingresar a esta aplicación.";
   }
 
+  if (error === "CredentialsSignin") {
+    message = "⚠️ Credenciales inválidas. Verifica tu correo y contraseña.";
+  }
+
   return (
     <div className="min-h-screen flex flex-col justify-center items-center text-center p-6 bg-gray-800 text-white">
       <h1 className="text-3xl font-bold mb-4 text-amber-400">

@@ -1,11 +1,10 @@
 "use client";
-import { loadCsvData } from "@/utils/loadCsvData";
+import { fetchSensorReadings } from "@/utils/api";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaTimes, FaDownload } from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
-import axios from "axios";
 import { useParams } from "next/navigation";
 import {
   LineChart,
@@ -41,14 +40,13 @@ const SensorDetail = () => {
   const router = useRouter();
   const params = useParams();
   const id = params?.id;
-  const [data, setData] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
-  const [dailyMinMax, setDailyMinMax] = useState({});
   const [sensorName, setSensorName] = useState("");
-  const [timeRange, setTimeRange] = useState(24); // En horas
+  const [timeRange, setTimeRange] = useState(24);
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  // Últimos 12 meses
   const getLast12Months = () => {
     const now = new Date();
     return Array.from({ length: 12 }, (_, i) => {
@@ -68,200 +66,83 @@ const SensorDetail = () => {
 
   useEffect(() => {
     if (!id) return;
+
     const fetchData = async () => {
+      setIsLoading(true);
+      setError("");
+
       try {
-        const response = await axios.get(
-          `https://webapi.ubibot.com/channels/${id}/summary.json?account_key=${process.env.NEXT_PUBLIC_UBIBOT_KEY}`
-        );
-        const jsonData = response.data;
+        const payload = await fetchSensorReadings(id, {
+          month: selectedMonth,
+          hours: selectedMonth ? undefined : timeRange,
+        });
 
-        if (!jsonData.feeds) return;
+        setSensorName(payload.sensorName || id);
 
-        if (jsonData.channel && jsonData.channel.name) {
-          setSensorName(jsonData.channel.name);
-        }
+        const normalized = (payload.data || [])
+          .map((entry) => ({
+            ...entry,
+            timestamp: new Date(entry.timestamp).getTime(),
+          }))
+          .filter((entry) => Number.isFinite(entry.timestamp));
 
-        const allData = jsonData.feeds
-          .map((feed) => {
-            let entry = {
-              timestamp: new Date(feed.created_at).getTime(),
-            };
-            if (feed.field1)
-              entry.temperatura = parseFloat(feed.field1.avg).toFixed(2);
-            if (feed.field2)
-              entry.humedad = parseFloat(feed.field2.avg).toFixed(2);
-            if (feed.field3)
-              entry.voltaje = parseFloat(feed.field3.avg).toFixed(2);
-            if (feed.field9)
-              entry.presion = parseFloat(feed.field9.avg).toFixed(2);
-            if (feed.field6) entry.luz = parseFloat(feed.field6.avg).toFixed(2);
-            return entry;
-          })
-          .filter((entry) => Object.keys(entry).length > 1);
-
-        setData(allData);
-      } catch (error) {
-        console.error("Error fetching sensor data:", error);
+        setFilteredData(normalized);
+      } catch (err) {
+        console.error("Error fetching sensor data from DB:", err);
+        setError("No se pudo cargar informacion del sensor desde la base de datos.");
+      } finally {
+        setIsLoading(false);
       }
     };
+
     fetchData();
-  }, [id]);
+  }, [id, timeRange, selectedMonth]);
 
-  useEffect(() => {
-    if (!selectedMonth || !id) return;
-
-    const fetchCsv = async () => {
-      const allCsvData = await loadCsvData(id);
-
-      const [year, month] = selectedMonth.split("-");
-      const filtered = allCsvData.filter((d) => {
-        if (!d.timestamp || isNaN(new Date(d.timestamp))) return false;
-        const dDate = new Date(d.timestamp);
-        const entryYear = dDate.getFullYear();
-        const entryMonth = dDate.getMonth(); // 0-based
-        const selectedYear = parseInt(year, 10);
-        const selectedMonth = parseInt(month, 10) - 1; // ajustamos a 0-based
-
-        return entryYear === selectedYear && entryMonth === selectedMonth;
-      });
-
-      const reversed = filtered
-        .map((entry) => {
-          const parsed = new Date(entry.timestamp);
-          const timestamp = isNaN(parsed.getTime()) ? null : parsed.getTime();
-
-          const numericEntry = Object.entries(entry).reduce(
-            (acc, [key, value]) => {
-              if (key === "timestamp") return acc;
-              const num = parseFloat(value);
-              acc[key] = isNaN(num) ? null : num; // 👈 IMPORTANTE: guardar como número
-              return acc;
-            },
-            {}
-          );
-
-          return {
-            ...numericEntry,
-            timestamp,
-          };
-        })
-        .filter((entry) => entry.timestamp !== null)
-        .reverse();
-
-      setFilteredData(reversed);
-
-      const dailyValues = {};
-
-      reversed.forEach((entry) => {
-        const dateObj = new Date(entry.timestamp);
-        const date = dateObj.toISOString().split("T")[0];
-
-        Object.keys(entry).forEach((key) => {
-          if (key !== "timestamp" && entry[key] != null && !isNaN(entry[key])) {
-            if (!dailyValues[key]) dailyValues[key] = {};
-            if (!dailyValues[key][date]) {
-              dailyValues[key][date] = {
-                min: entry[key],
-                max: entry[key],
-              };
-            } else {
-              dailyValues[key][date].min = Math.min(
-                dailyValues[key][date].min,
-                entry[key]
-              );
-              dailyValues[key][date].max = Math.max(
-                dailyValues[key][date].max,
-                entry[key]
-              );
-            }
-          }
-        });
-      });
-
-      setDailyMinMax(dailyValues);
-    };
-
-    fetchCsv();
-  }, [selectedMonth, id]);
-
-  useEffect(() => {
-    if (data.length === 0) return;
-
-    const now = new Date();
-    const startTime = new Date(now.getTime() - timeRange * 60 * 60 * 1000);
-
-    const filtered = data.filter((entry) => entry.timestamp >= startTime);
-    if (!selectedMonth) {
-      const reversed = filtered.reverse();
-      setFilteredData(reversed);
-
-      const dailyValues = {};
-
-      reversed.forEach((entry) => {
-        const date = new Date(entry.timestamp).toISOString().split("T")[0];
-
-        Object.keys(entry).forEach((key) => {
-          if (key !== "timestamp") {
-            if (!dailyValues[key]) dailyValues[key] = {};
-            if (!dailyValues[key][date]) {
-              dailyValues[key][date] = {
-                min: parseFloat(entry[key]),
-                max: parseFloat(entry[key]),
-              };
-            } else {
-              dailyValues[key][date].min = Math.min(
-                dailyValues[key][date].min,
-                parseFloat(entry[key])
-              );
-              dailyValues[key][date].max = Math.max(
-                dailyValues[key][date].max,
-                parseFloat(entry[key])
-              );
-            }
-          }
-        });
-      });
-
-      setDailyMinMax(dailyValues);
-    }
-
+  const dailyMinMax = useMemo(() => {
     const dailyValues = {};
 
-    filtered.forEach((entry) => {
+    filteredData.forEach((entry) => {
       const date = new Date(entry.timestamp).toISOString().split("T")[0];
 
       Object.keys(entry).forEach((key) => {
-        if (key !== "timestamp") {
-          if (!dailyValues[key]) dailyValues[key] = {};
-          if (!dailyValues[key][date]) {
-            dailyValues[key][date] = {
-              min: parseFloat(entry[key]).toFixed(2),
-              max: parseFloat(entry[key]).toFixed(2),
-            };
-          } else {
-            dailyValues[key][date].min = Math.min(
-              dailyValues[key][date].min,
-              parseFloat(entry[key])
-            ).toFixed(2);
-            dailyValues[key][date].max = Math.max(
-              dailyValues[key][date].max,
-              parseFloat(entry[key])
-            ).toFixed(2);
-          }
+        if (key === "timestamp") return;
+
+        const value = parseFloat(entry[key]);
+        if (Number.isNaN(value)) return;
+
+        if (!dailyValues[key]) {
+          dailyValues[key] = {};
+        }
+
+        if (!dailyValues[key][date]) {
+          dailyValues[key][date] = {
+            min: value,
+            max: value,
+          };
+        } else {
+          dailyValues[key][date].min = Math.min(dailyValues[key][date].min, value);
+          dailyValues[key][date].max = Math.max(dailyValues[key][date].max, value);
         }
       });
     });
 
-    setDailyMinMax(dailyValues);
-  }, [data, timeRange]);
+    return dailyValues;
+  }, [filteredData]);
 
-  const handleDownloadPDF = async () => {
+  const minMaxValues = useMemo(() => {
+    return Object.keys(dailyMinMax).reduce((acc, key) => {
+      acc[key] = calculateMinMax(filteredData, key);
+      return acc;
+    }, {});
+  }, [dailyMinMax, filteredData]);
+
+  async function handleDownloadPDF() {
     const doc = new jsPDF({
       orientation: "portrait",
       unit: "mm",
       format: "a4",
     });
-    const elements = document.querySelectorAll(".sensor-chart, .data-table"); // Captura todas las gráficas y tablas
+    const elements = document.querySelectorAll(".sensor-chart, .data-table");
     let yOffset = 10;
 
     for (let element of elements) {
@@ -279,12 +160,7 @@ const SensorDetail = () => {
     }
 
     doc.save(`sensor_${id}.pdf`);
-  };
-
-  const minMaxValues = Object.keys(dailyMinMax).reduce((acc, key) => {
-    acc[key] = calculateMinMax(filteredData, key);
-    return acc;
-  }, {});
+  }
 
   return (
     <div className="p-6">
@@ -314,7 +190,7 @@ const SensorDetail = () => {
             value={timeRange}
             onChange={(e) => {
               setTimeRange(Number(e.target.value));
-              setSelectedMonth(null); // ✅ Reinicia selección de mes
+              setSelectedMonth(null);
             }}
             className="border p-1 rounded"
           >
@@ -342,6 +218,18 @@ const SensorDetail = () => {
         </div>
       </div>
 
+      {isLoading && (
+        <div className="bg-gray-800 text-white border border-gray-800 rounded-md p-4 text-center shadow-md mb-6 mt-6">
+          <p className="text-base font-medium">Cargando datos desde la base de datos...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 text-red-700 border border-red-200 rounded-md p-4 text-center shadow-md mb-6 mt-6">
+          <p className="text-base font-medium">{error}</p>
+        </div>
+      )}
+
       {selectedMonth && filteredData.length === 0 && (
         <div className="bg-gray-800 text-white border border-gray-800 rounded-md p-4 text-center shadow-md mb-6 mt-6">
           <p className="text-base font-medium">
@@ -350,12 +238,24 @@ const SensorDetail = () => {
         </div>
       )}
 
+      {!selectedMonth && !isLoading && !error && filteredData.length === 0 && (
+        <div className="bg-gray-800 text-white border border-gray-800 rounded-md p-4 text-center shadow-md mb-6 mt-6">
+          <p className="text-base font-medium">
+            No hay datos disponibles para el periodo seleccionado.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {filteredData.length > 0 &&
           Object.keys(dailyMinMax).map((key) => {
             const chartData = filteredData.filter(
-              (d) => d[key] != null && !isNaN(d[key])
+              (d) => d[key] != null && !Number.isNaN(parseFloat(d[key]))
             );
+
+            if (chartData.length === 0 || minMaxValues[key].min == null) {
+              return null;
+            }
 
             return (
               <div
@@ -385,7 +285,7 @@ const SensorDetail = () => {
                         minMaxValues[key].min * 0.95,
                         minMaxValues[key].max * 1.05,
                       ]}
-                      tickFormatter={(value) => value.toFixed(2)}
+                      tickFormatter={(value) => Number(value).toFixed(2)}
                     />
 
                     <Tooltip />
@@ -457,6 +357,7 @@ const SensorDetail = () => {
               </thead>
               <tbody>
                 {Object.keys(dailyMinMax[key])
+                  .sort((a, b) => a.localeCompare(b))
                   .slice(-30)
                   .map((date) => (
                     <tr key={date}>
@@ -464,10 +365,10 @@ const SensorDetail = () => {
                         {date}
                       </td>
                       <td className="border text-center border-gray-300 p-2">
-                        {dailyMinMax[key][date].min} ({unitMap[key]})
+                        {dailyMinMax[key][date].min.toFixed(2)} ({unitMap[key]})
                       </td>
                       <td className="border text-center border-gray-300 p-2">
-                        {dailyMinMax[key][date].max} ({unitMap[key]})
+                        {dailyMinMax[key][date].max.toFixed(2)} ({unitMap[key]})
                       </td>
                     </tr>
                   ))}

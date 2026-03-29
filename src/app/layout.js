@@ -1,6 +1,5 @@
 "use client";
 import { useEffect } from "react";
-import { SessionProvider } from "next-auth/react";
 import AuthGuard from "@/components/AuthGuard";
 import InstallButton from "@/components/InstallButton";
 
@@ -21,10 +20,8 @@ export default function RootLayout({ children }) {
         <link rel="manifest" href="/manifest.json" />
       </head>
       <body>
-        <SessionProvider>
-          <AuthGuard>{children}</AuthGuard>
-          <InstallButton />
-        </SessionProvider>
+        <AuthGuard>{children}</AuthGuard>
+        <InstallButton />
       </body>
     </html>
   );

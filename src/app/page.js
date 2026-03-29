@@ -1,5 +1,4 @@
 "use client";
-import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import Layout from "@/components/Layout";
 import Card from "@/components/Card";
@@ -7,10 +6,16 @@ import SearchBar from "@/components/SearchBar";
 import Sidebar from "@/components/Sidebar";
 import { fetchSensorsData } from "@/utils/api";
 import { LogOut } from "lucide-react";
-import { signOut } from "next-auth/react";
+import { authClient } from "@/lib/auth-client";
 
 export default function Home() {
-  const { data: session, status } = useSession();
+  const sessionState = authClient.useSession();
+  const session = sessionState.data;
+  const status = sessionState.isPending
+    ? "loading"
+    : session
+      ? "authenticated"
+      : "unauthenticated";
   const [sensors, setSensors] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -78,7 +83,7 @@ export default function Home() {
         </div>
         <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6">
           <button
-            onClick={() => signOut()}
+            onClick={() => authClient.signOut()}
             className="bg-red-600 hover:bg-red-500 text-white p-2 rounded-full flex items-center shadow-lg"
             title="Cerrar sesión"
           >

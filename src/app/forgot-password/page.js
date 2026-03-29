@@ -1,40 +1,30 @@
 "use client";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 
-export default function LoginPage() {
-  const sessionState = authClient.useSession();
-  const session = sessionState.data;
-  const status = sessionState.isPending
-    ? "loading"
-    : session
-      ? "authenticated"
-      : "unauthenticated";
-  const router = useRouter();
+export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (status === "authenticated") {
-      router.replace("/");
-    }
-  }, [status, router]);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setSuccess("");
     setIsSubmitting(true);
 
     try {
-      const result = await authClient.signIn.email({ email, password });
+      const result = await authClient.requestPasswordReset({
+        email,
+        redirectTo: "/login",
+      });
 
-      if (result?.error || !result?.data) {
-        const rawMessage = (result?.error?.message || "").toLowerCase();
+      if (result?.error) {
+        const rawMessage = (result.error.message || "").toLowerCase();
 
         if (rawMessage.includes("invalid origin")) {
           setError(
@@ -42,15 +32,13 @@ export default function LoginPage() {
               window.location.origin
           );
         } else {
-          setError("Credenciales invalidas. Verifica tu correo y contrasena.");
+          setError(result.error.message || "No se pudo enviar el correo.");
         }
 
-        setIsSubmitting(false);
         return;
       }
 
-      router.replace("/");
-      router.refresh();
+      setSuccess("Si el correo existe, enviamos instrucciones para recuperar la contrasena.");
     } catch (err) {
       const rawMessage = err instanceof Error ? err.message.toLowerCase() : "";
 
@@ -60,7 +48,7 @@ export default function LoginPage() {
             window.location.origin
         );
       } else {
-        setError("No se pudo iniciar sesion. Intenta nuevamente.");
+        setError("No se pudo enviar el correo.");
       }
     } finally {
       setIsSubmitting(false);
@@ -74,13 +62,13 @@ export default function LoginPage() {
           <Image src="/logo.png" alt="Logo" width={100} height={100} />
         </div>
 
-        <h1 className="text-2xl font-bold mb-4">Iniciar Sesión</h1>
+        <h1 className="text-2xl font-bold mb-4">Recuperar Contrasena</h1>
+
         <form onSubmit={handleSubmit} className="space-y-3 text-left">
           <div>
             <label className="mb-1 block text-sm text-gray-300">Correo</label>
             <input
               type="email"
-              autoComplete="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
@@ -88,38 +76,20 @@ export default function LoginPage() {
             />
           </div>
 
-          <div>
-            <label className="mb-1 block text-sm text-gray-300">Contraseña</label>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-white outline-none focus:border-blue-400"
-            />
-          </div>
-
           {error && <p className="text-sm text-red-400">{error}</p>}
+          {success && <p className="text-sm text-green-400">{success}</p>}
 
           <button
             type="submit"
             disabled={isSubmitting}
             className="w-full rounded-md bg-white py-2 font-bold text-gray-900 transition-all hover:bg-gray-200 disabled:cursor-not-allowed disabled:bg-gray-400"
           >
-            {isSubmitting ? "Validando..." : "Ingresar"}
+            {isSubmitting ? "Enviando..." : "Enviar enlace"}
           </button>
 
           <div className="pt-2 text-center text-sm text-gray-300">
-            <Link href="/forgot-password" className="underline hover:text-white">
-              Olvide mi contrasena
-            </Link>
-          </div>
-
-          <div className="text-center text-sm text-gray-300">
-            No tienes cuenta?{" "}
-            <Link href="/signup" className="underline hover:text-white">
-              Registrate
+            <Link href="/login" className="underline hover:text-white">
+              Volver al inicio de sesion
             </Link>
           </div>
         </form>

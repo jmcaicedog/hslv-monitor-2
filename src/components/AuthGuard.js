@@ -1,12 +1,18 @@
 "use client";
-import { useSession } from "next-auth/react";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
+import { authClient } from "@/lib/auth-client";
 
-const publicRoutes = ["/login", "/api/auth/error"];
+const publicRoutes = ["/login", "/signup", "/forgot-password", "/api/auth/error"];
 
 export default function AuthGuard({ children }) {
-  const { data: session, status } = useSession();
+  const sessionState = authClient.useSession();
+  const session = sessionState.data;
+  const status = sessionState.isPending
+    ? "loading"
+    : session
+      ? "authenticated"
+      : "unauthenticated";
   const router = useRouter();
   const pathname = usePathname();
 
