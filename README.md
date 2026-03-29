@@ -59,14 +59,6 @@ La app ahora consulta sensores e historicos desde Neon. No consulta CSV ni API U
 npm run db:init
 ```
 
-### Cargar historico desde CSV
-
-```bash
-npm run db:import:csv
-```
-
-Este comando lee archivos en `public/csv/*.csv` y los inserta en Neon.
-
 ### Sincronizar datos recientes desde Ubibot
 
 ```bash
@@ -78,9 +70,8 @@ Este comando actualiza catalogo de sensores y agrega/actualiza lecturas reciente
 ### Operacion sugerida
 
 1. Ejecutar una vez `npm run db:init`.
-2. Ejecutar una vez `npm run db:import:csv`.
-3. Programar `npm run db:sync:api` cada cierto tiempo (cron) para mantener datos al dia.
-4. Levantar la app con `npm run dev` o `npm start`.
+2. Programar `npm run db:sync:api` cada cierto tiempo (cron) para mantener datos al dia.
+3. Levantar la app con `npm run dev` o `npm start`.
 
 ## Requisitos
 
