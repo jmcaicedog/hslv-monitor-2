@@ -79,17 +79,18 @@ Notas de sincronizacion Ubibot:
 - Para obtener series completas (temperatura/humedad/voltaje/etc.) configura `UBIBOT_CHANNEL_API_KEYS_JSON` con la `api_key` de cada canal.
 - El script intenta primero `/feeds` con `api_key` por canal y, si no existe o falla, hace fallback a `/summary`.
 
-### Cron en Vercel
+### Cron externo (recomendado)
 
-El proyecto incluye `vercel.json` para ejecutar `GET /api/cron/sync` cada 10 minutos.
+En Vercel Hobby usa un scheduler externo (por ejemplo cron-job.org) para invocar:
 
-1. Configura en Vercel las variables de entorno:
-	- `DATABASE_URL`
-	- `UBIBOT_ACCOUNT_KEY`
-	- `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
-	- `CRON_SECRET`
-2. Vercel invocara automaticamente el endpoint cron.
-3. El endpoint requiere header `Authorization: Bearer <CRON_SECRET>`.
+- `GET /api/cron/sync`
+- Header requerido: `Authorization: Bearer <CRON_SECRET>`
+
+Variables que debes configurar en Vercel:
+- `DATABASE_URL`
+- `UBIBOT_ACCOUNT_KEY`
+- `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
+- `CRON_SECRET`
 
 ### Operacion sugerida
 
