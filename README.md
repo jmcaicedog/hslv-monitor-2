@@ -94,6 +94,12 @@ Variables que debes configurar en Vercel:
 - `UBIBOT_ACCOUNT_KEY`
 - `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
 - `CRON_SECRET`
+- `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `10`)
+
+Recomendacion operativa para evitar `429` y completar datos en iteraciones:
+- Configura `CRON_MAX_CHANNELS_PER_RUN=10` (o 12 maximo).
+- Programa el cron cada 10 minutos.
+- El sistema prioriza sensores pendientes de corrida anterior y los reintenta automaticamente.
 
 ### Operacion sugerida
 

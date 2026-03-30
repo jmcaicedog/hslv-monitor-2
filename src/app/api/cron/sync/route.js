@@ -43,7 +43,13 @@ export async function GET(request) {
   }
 
   try {
-    const result = await runUbiBotSync();
+    const maxChannelsFromEnv = Number(process.env.CRON_MAX_CHANNELS_PER_RUN);
+    const maxChannelsPerRun =
+      Number.isFinite(maxChannelsFromEnv) && maxChannelsFromEnv > 0
+        ? Math.floor(maxChannelsFromEnv)
+        : 10;
+
+    const result = await runUbiBotSync({ maxChannelsPerRun });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed";

@@ -8,6 +8,12 @@ const UBIBOT_RETRY_BACKOFF_MS = 4000;
 const UBIBOT_ENABLE_RETRY = process.env.UBIBOT_ENABLE_RETRY === "true";
 const PENDING_RETRY_BATCH_LIMIT = 200;
 
+function parsePositiveInt(raw, fallback = 0) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
 function parseSensorIdFilter(raw) {
   if (!raw) return null;
 
@@ -240,8 +246,13 @@ async function markPendingSensorFailure(sensorId, reason) {
   );
 }
 
-export async function runUbiBotSync() {
+export async function runUbiBotSync(options = {}) {
   await ensureSensorSchema();
+
+  const maxChannelsPerRun = parsePositiveInt(
+    options.maxChannelsPerRun,
+    parsePositiveInt(process.env.UBIBOT_MAX_CHANNELS_PER_RUN, 0)
+  );
 
   const accountKey = process.env.UBIBOT_ACCOUNT_KEY || process.env.NEXT_PUBLIC_UBIBOT_KEY;
   if (!accountKey) {
@@ -276,26 +287,36 @@ export async function runUbiBotSync() {
     ? channels.filter((channel) => sensorFilter.has(Number(channel.channel_id)))
     : channels;
 
-  const channelsToProcess = [...baseChannels];
-  const seenIds = new Set(
-    baseChannels.map((channel) => Number(channel.channel_id)).filter((id) => Number.isFinite(id))
-  );
+  const channelsToProcess = [];
+  const seenIds = new Set();
 
   for (const pendingId of duePendingSensorIds) {
-    if (seenIds.has(pendingId)) continue;
     const pendingChannel = channelById.get(pendingId);
-    if (pendingChannel) {
-      channelsToProcess.push(pendingChannel);
-      seenIds.add(pendingId);
-    }
+    if (!pendingChannel) continue;
+    const channelId = Number(pendingChannel.channel_id);
+    if (!Number.isFinite(channelId) || seenIds.has(channelId)) continue;
+    channelsToProcess.push(pendingChannel);
+    seenIds.add(channelId);
   }
+
+  for (const channel of baseChannels) {
+    const channelId = Number(channel.channel_id);
+    if (!Number.isFinite(channelId) || seenIds.has(channelId)) continue;
+    channelsToProcess.push(channel);
+    seenIds.add(channelId);
+  }
+
+  const effectiveChannelsToProcess =
+    maxChannelsPerRun > 0
+      ? channelsToProcess.slice(0, maxChannelsPerRun)
+      : channelsToProcess;
 
   let totalInserted = 0;
   let syncedChannels = 0;
   let failedChannels = 0;
   const failedSensorIds = [];
 
-  for (const channel of channelsToProcess) {
+  for (const channel of effectiveChannelsToProcess) {
     const sensorId = Number(channel.channel_id);
     if (!Number.isFinite(sensorId)) continue;
 
@@ -413,6 +434,8 @@ export async function runUbiBotSync() {
   const pendingSummary = await query(`SELECT COUNT(*)::int AS count FROM sync_pending_sensors;`);
 
   return {
+    attemptedChannels: effectiveChannelsToProcess.length,
+    maxChannelsPerRun,
     syncedChannels,
     failedChannels,
     failedSensorIds,
