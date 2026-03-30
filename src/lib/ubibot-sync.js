@@ -3,6 +3,84 @@ import { query } from "./db.js";
 
 const BATCH_SIZE = 1000;
 const FEEDS_RESULTS_LIMIT = 288;
+const UBIBOT_MAX_RETRIES = 3;
+const UBIBOT_RETRY_BACKOFF_MS = 4000;
+const UBIBOT_ENABLE_RETRY = process.env.UBIBOT_ENABLE_RETRY === "true";
+
+function parseSensorIdFilter(raw) {
+  if (!raw) return null;
+
+  const set = new Set(
+    String(raw)
+      .split(",")
+      .map((part) => Number(part.trim()))
+      .filter((id) => Number.isFinite(id))
+  );
+
+  return set.size > 0 ? set : null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(response, bodyText) {
+  const retryAfter = response.headers.get("retry-after");
+  if (retryAfter) {
+    const sec = Number.parseInt(retryAfter, 10);
+    if (Number.isFinite(sec) && sec > 0) {
+      return sec * 1000;
+    }
+  }
+
+  const match = bodyText.match(/another\s+(\d+)\s+seconds?/i);
+  if (match) {
+    const sec = Number.parseInt(match[1], 10);
+    if (Number.isFinite(sec) && sec > 0) {
+      return sec * 1000;
+    }
+  }
+
+  return null;
+}
+
+async function fetchJsonWithRetry(url, { label, maxRetries = UBIBOT_MAX_RETRIES } = {}) {
+  const allowedRetries = UBIBOT_ENABLE_RETRY ? maxRetries : 0;
+
+  for (let attempt = 0; attempt <= allowedRetries; attempt += 1) {
+    const response = await fetch(url);
+    const rawBody = await response.text();
+
+    let payload = null;
+    try {
+      payload = rawBody ? JSON.parse(rawBody) : null;
+    } catch {
+      payload = null;
+    }
+
+    if (response.ok) {
+      return { ok: true, status: response.status, payload };
+    }
+
+    const bodyText = String(rawBody || "");
+    const isRateLimited =
+      response.status === 429 ||
+      /rate\s*limit|too\s*many\s*requests|another\s+\d+\s+seconds?/i.test(bodyText);
+
+    if (!isRateLimited || attempt === allowedRetries) {
+      return { ok: false, status: response.status, payload, rawBody: bodyText };
+    }
+
+    const retryAfterMs = parseRetryAfterMs(response, bodyText);
+    const waitMs = retryAfterMs ?? UBIBOT_RETRY_BACKOFF_MS * (attempt + 1);
+    console.warn(
+      `[ubibot-sync] ${label || "request"} limitado por rate limit (${response.status}). Reintentando en ${Math.ceil(waitMs / 1000)}s...`
+    );
+    await sleep(waitMs);
+  }
+
+  return { ok: false, status: 0, payload: null, rawBody: "" };
+}
 
 function parseNumber(raw) {
   if (raw == null || raw === "") return null;
@@ -96,18 +174,19 @@ async function fetchFeedsWithApiKey({ sensorId, apiKey }) {
     return { ok: false, status: 0, feeds: [] };
   }
 
-  const response = await fetch(
-    `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?api_key=${encodeURIComponent(apiKey)}&results=${FEEDS_RESULTS_LIMIT}`
+  const result = await fetchJsonWithRetry(
+    `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?api_key=${encodeURIComponent(apiKey)}&results=${FEEDS_RESULTS_LIMIT}`,
+    { label: `feeds sensor ${sensorId}` }
   );
 
-  if (!response.ok) {
-    return { ok: false, status: response.status, feeds: [] };
+  if (!result.ok) {
+    return { ok: false, status: result.status, feeds: [] };
   }
 
-  const payload = await response.json();
+  const payload = result.payload || {};
   return {
     ok: true,
-    status: response.status,
+    status: result.status,
     feeds: payload.feeds || [],
   };
 }
@@ -122,21 +201,26 @@ export async function runUbiBotSync() {
 
   const channelApiKeys = parseJsonEnv(process.env.UBIBOT_CHANNEL_API_KEYS_JSON);
 
-  const channelsResponse = await fetch(
-    `https://webapi.ubibot.com/channels?account_key=${accountKey}`
+  const channelsResult = await fetchJsonWithRetry(
+    `https://webapi.ubibot.com/channels?account_key=${accountKey}`,
+    { label: "channels" }
   );
 
-  if (!channelsResponse.ok) {
-    throw new Error(`No se pudo consultar canales Ubibot (${channelsResponse.status}).`);
+  if (!channelsResult.ok) {
+    throw new Error(`No se pudo consultar canales Ubibot (${channelsResult.status}).`);
   }
 
-  const channelsPayload = await channelsResponse.json();
+  const channelsPayload = channelsResult.payload || {};
   const channels = channelsPayload.channels || [];
+  const sensorFilter = parseSensorIdFilter(process.env.UBIBOT_ONLY_SENSOR_IDS);
+  const channelsToProcess = sensorFilter
+    ? channels.filter((channel) => sensorFilter.has(Number(channel.channel_id)))
+    : channels;
 
   let totalInserted = 0;
   let syncedChannels = 0;
 
-  for (const channel of channels) {
+  for (const channel of channelsToProcess) {
     const sensorId = Number(channel.channel_id);
     if (!Number.isFinite(sensorId)) continue;
 
@@ -212,15 +296,16 @@ export async function runUbiBotSync() {
       readings = feedsPayload.feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
       sourceForSeries = "api_feed";
     } else {
-      const summaryResponse = await fetch(
-        `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`
+      const summaryResult = await fetchJsonWithRetry(
+        `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
+        { label: `summary sensor ${sensorId}` }
       );
 
-      if (!summaryResponse.ok) {
+      if (!summaryResult.ok) {
         continue;
       }
 
-      const summaryPayload = await summaryResponse.json();
+      const summaryPayload = summaryResult.payload || {};
       const feeds = summaryPayload.feeds || [];
       readings = feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
     }
