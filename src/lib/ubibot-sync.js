@@ -274,6 +274,7 @@ export async function runUbiBotSync(options = {}) {
   const channels = channelsPayload.channels || [];
   const sensorFilter = parseSensorIdFilter(process.env.UBIBOT_ONLY_SENSOR_IDS);
   const duePendingSensorIds = await getDuePendingSensorIds();
+  const duePendingSet = new Set(duePendingSensorIds);
   const channelById = new Map();
 
   for (const channel of channels) {
@@ -310,6 +311,12 @@ export async function runUbiBotSync(options = {}) {
     maxChannelsPerRun > 0
       ? channelsToProcess.slice(0, maxChannelsPerRun)
       : channelsToProcess;
+
+  const retriedFromPending = effectiveChannelsToProcess.reduce((count, channel) => {
+    const sensorId = Number(channel.channel_id);
+    if (!Number.isFinite(sensorId)) return count;
+    return duePendingSet.has(sensorId) ? count + 1 : count;
+  }, 0);
 
   let totalInserted = 0;
   let syncedChannels = 0;
@@ -440,7 +447,8 @@ export async function runUbiBotSync(options = {}) {
     failedChannels,
     failedSensorIds,
     pendingRetries: pendingSummary.rows[0]?.count || 0,
-    retriedFromPending: duePendingSensorIds.length,
+    retriedFromPending,
+    duePendingTotal: duePendingSensorIds.length,
     totalInserted,
   };
 }
