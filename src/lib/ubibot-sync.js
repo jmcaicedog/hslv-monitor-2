@@ -6,6 +6,7 @@ const FEEDS_RESULTS_LIMIT = 288;
 const UBIBOT_MAX_RETRIES = 3;
 const UBIBOT_RETRY_BACKOFF_MS = 4000;
 const UBIBOT_ENABLE_RETRY = process.env.UBIBOT_ENABLE_RETRY === "true";
+const PENDING_RETRY_BATCH_LIMIT = 200;
 
 function parseSensorIdFilter(raw) {
   if (!raw) return null;
@@ -191,6 +192,54 @@ async function fetchFeedsWithApiKey({ sensorId, apiKey }) {
   };
 }
 
+async function getDuePendingSensorIds() {
+  const { rows } = await query(
+    `
+      SELECT sensor_id
+      FROM sync_pending_sensors
+      WHERE next_retry_at <= NOW()
+      ORDER BY next_retry_at ASC
+      LIMIT $1;
+    `,
+    [PENDING_RETRY_BATCH_LIMIT]
+  );
+
+  return rows
+    .map((row) => Number(row.sensor_id))
+    .filter((id) => Number.isFinite(id));
+}
+
+async function clearPendingSensor(sensorId) {
+  await query(`DELETE FROM sync_pending_sensors WHERE sensor_id = $1;`, [sensorId]);
+}
+
+async function markPendingSensorFailure(sensorId, reason) {
+  await query(
+    `
+      INSERT INTO sync_pending_sensors (sensor_id, attempts, last_error, next_retry_at, updated_at)
+      VALUES (
+        $1,
+        1,
+        LEFT($2, 400),
+        NOW() + INTERVAL '5 minutes',
+        NOW()
+      )
+      ON CONFLICT (sensor_id)
+      DO UPDATE SET
+        attempts = sync_pending_sensors.attempts + 1,
+        last_error = LEFT(EXCLUDED.last_error, 400),
+        next_retry_at = NOW() + make_interval(
+          mins => LEAST(
+            120,
+            5 * (2 ^ LEAST(sync_pending_sensors.attempts, 5))::int
+          )
+        ),
+        updated_at = NOW();
+    `,
+    [sensorId, String(reason || "sync_failed")]
+  );
+}
+
 export async function runUbiBotSync() {
   await ensureSensorSchema();
 
@@ -213,113 +262,162 @@ export async function runUbiBotSync() {
   const channelsPayload = channelsResult.payload || {};
   const channels = channelsPayload.channels || [];
   const sensorFilter = parseSensorIdFilter(process.env.UBIBOT_ONLY_SENSOR_IDS);
-  const channelsToProcess = sensorFilter
+  const duePendingSensorIds = await getDuePendingSensorIds();
+  const channelById = new Map();
+
+  for (const channel of channels) {
+    const sensorId = Number(channel.channel_id);
+    if (Number.isFinite(sensorId)) {
+      channelById.set(sensorId, channel);
+    }
+  }
+
+  const baseChannels = sensorFilter
     ? channels.filter((channel) => sensorFilter.has(Number(channel.channel_id)))
     : channels;
 
+  const channelsToProcess = [...baseChannels];
+  const seenIds = new Set(
+    baseChannels.map((channel) => Number(channel.channel_id)).filter((id) => Number.isFinite(id))
+  );
+
+  for (const pendingId of duePendingSensorIds) {
+    if (seenIds.has(pendingId)) continue;
+    const pendingChannel = channelById.get(pendingId);
+    if (pendingChannel) {
+      channelsToProcess.push(pendingChannel);
+      seenIds.add(pendingId);
+    }
+  }
+
   let totalInserted = 0;
   let syncedChannels = 0;
+  let failedChannels = 0;
+  const failedSensorIds = [];
 
   for (const channel of channelsToProcess) {
     const sensorId = Number(channel.channel_id);
     if (!Number.isFinite(sensorId)) continue;
 
-    let lastPayload = null;
     try {
-      lastPayload = channel.last_values ? JSON.parse(channel.last_values) : null;
-    } catch {
-      lastPayload = null;
-    }
-
-    const lastSeenAt =
-      lastPayload?.field1?.created_at ||
-      lastPayload?.field2?.created_at ||
-      lastPayload?.field3?.created_at ||
-      null;
-
-    await query(
-      `
-        INSERT INTO sensors (id, title, description, status, last_payload, last_seen_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-        ON CONFLICT (id)
-        DO UPDATE SET
-          title = EXCLUDED.title,
-          description = EXCLUDED.description,
-          status = EXCLUDED.status,
-          last_payload = EXCLUDED.last_payload,
-          last_seen_at = COALESCE(EXCLUDED.last_seen_at, sensors.last_seen_at),
-          updated_at = NOW();
-      `,
-      [
-        sensorId,
-        channel.name || `Sensor ${sensorId}`,
-        channel.description || "",
-        Number.isFinite(Number(channel.net)) ? Number(channel.net) : null,
-        JSON.stringify(lastPayload),
-        lastSeenAt,
-      ]
-    );
-
-    const latestReading = lastPayload
-      ? [
-          {
-            sensorId,
-            observedAt:
-              lastPayload.field1?.created_at ||
-              lastPayload.field2?.created_at ||
-              lastPayload.field3?.created_at ||
-              new Date().toISOString(),
-            temperatura: parseNumber(lastPayload.field1?.value),
-            humedad: parseNumber(lastPayload.field2?.value),
-            voltaje: parseNumber(lastPayload.field3?.value),
-            presion: parseNumber(lastPayload.field9?.value),
-            luz: parseNumber(lastPayload.field6?.value),
-          },
-        ]
-      : [];
-
-    for (const batch of chunk(latestReading, BATCH_SIZE)) {
-      await upsertReadings(batch, "api_last");
-      totalInserted += batch.length;
-    }
-
-    const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
-    const feedsPayload = await fetchFeedsWithApiKey({
-      sensorId,
-      apiKey: apiKeyForChannel,
-    });
-
-    let readings = [];
-    let sourceForSeries = "api_summary";
-
-    if (feedsPayload.ok && feedsPayload.feeds.length > 0) {
-      readings = feedsPayload.feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
-      sourceForSeries = "api_feed";
-    } else {
-      const summaryResult = await fetchJsonWithRetry(
-        `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
-        { label: `summary sensor ${sensorId}` }
-      );
-
-      if (!summaryResult.ok) {
-        continue;
+      let lastPayload = null;
+      try {
+        lastPayload = channel.last_values ? JSON.parse(channel.last_values) : null;
+      } catch {
+        lastPayload = null;
       }
 
-      const summaryPayload = summaryResult.payload || {};
-      const feeds = summaryPayload.feeds || [];
-      readings = feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
-    }
+      const lastSeenAt =
+        lastPayload?.field1?.created_at ||
+        lastPayload?.field2?.created_at ||
+        lastPayload?.field3?.created_at ||
+        null;
 
-    for (const batch of chunk(readings, BATCH_SIZE)) {
-      await upsertReadings(batch, sourceForSeries);
-      totalInserted += batch.length;
-    }
+      await query(
+        `
+          INSERT INTO sensors (id, title, description, status, last_payload, last_seen_at)
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+          ON CONFLICT (id)
+          DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            status = EXCLUDED.status,
+            last_payload = EXCLUDED.last_payload,
+            last_seen_at = COALESCE(EXCLUDED.last_seen_at, sensors.last_seen_at),
+            updated_at = NOW();
+        `,
+        [
+          sensorId,
+          channel.name || `Sensor ${sensorId}`,
+          channel.description || "",
+          Number.isFinite(Number(channel.net)) ? Number(channel.net) : null,
+          JSON.stringify(lastPayload),
+          lastSeenAt,
+        ]
+      );
 
-    syncedChannels += 1;
+      const latestReading = lastPayload
+        ? [
+            {
+              sensorId,
+              observedAt:
+                lastPayload.field1?.created_at ||
+                lastPayload.field2?.created_at ||
+                lastPayload.field3?.created_at ||
+                new Date().toISOString(),
+              temperatura: parseNumber(lastPayload.field1?.value),
+              humedad: parseNumber(lastPayload.field2?.value),
+              voltaje: parseNumber(lastPayload.field3?.value),
+              presion: parseNumber(lastPayload.field9?.value),
+              luz: parseNumber(lastPayload.field6?.value),
+            },
+          ]
+        : [];
+
+      for (const batch of chunk(latestReading, BATCH_SIZE)) {
+        await upsertReadings(batch, "api_last");
+        totalInserted += batch.length;
+      }
+
+      const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
+      const feedsPayload = await fetchFeedsWithApiKey({
+        sensorId,
+        apiKey: apiKeyForChannel,
+      });
+
+      let readings = [];
+      let sourceForSeries = "api_summary";
+      let seriesFetchSucceeded = false;
+
+      if (feedsPayload.ok && feedsPayload.feeds.length > 0) {
+        readings = feedsPayload.feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
+        sourceForSeries = "api_feed";
+        seriesFetchSucceeded = true;
+      } else {
+        const summaryResult = await fetchJsonWithRetry(
+          `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
+          { label: `summary sensor ${sensorId}` }
+        );
+
+        if (!summaryResult.ok) {
+          failedChannels += 1;
+          failedSensorIds.push(sensorId);
+          await markPendingSensorFailure(sensorId, `summary_status_${summaryResult.status || 0}`);
+          continue;
+        }
+
+        const summaryPayload = summaryResult.payload || {};
+        const feeds = summaryPayload.feeds || [];
+        readings = feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
+        seriesFetchSucceeded = true;
+      }
+
+      for (const batch of chunk(readings, BATCH_SIZE)) {
+        await upsertReadings(batch, sourceForSeries);
+        totalInserted += batch.length;
+      }
+
+      if (seriesFetchSucceeded) {
+        await clearPendingSensor(sensorId);
+      }
+
+      syncedChannels += 1;
+    } catch (error) {
+      failedChannels += 1;
+      failedSensorIds.push(sensorId);
+      const message = error instanceof Error ? error.message : "unexpected_error";
+      await markPendingSensorFailure(sensorId, message);
+    }
   }
+
+  const pendingSummary = await query(`SELECT COUNT(*)::int AS count FROM sync_pending_sensors;`);
 
   return {
     syncedChannels,
+    failedChannels,
+    failedSensorIds,
+    pendingRetries: pendingSummary.rows[0]?.count || 0,
+    retriedFromPending: duePendingSensorIds.length,
     totalInserted,
   };
 }

@@ -40,6 +40,21 @@ export async function ensureSensorSchema() {
       ON sensor_readings(sensor_id, observed_at DESC);
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS sync_pending_sensors (
+      sensor_id BIGINT PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_sync_pending_sensors_next_retry
+      ON sync_pending_sensors(next_retry_at ASC);
+  `);
+
   schemaEnsured = true;
 }
 

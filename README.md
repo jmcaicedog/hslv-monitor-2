@@ -84,7 +84,10 @@ Notas de sincronizacion Ubibot:
 En Vercel Hobby usa un scheduler externo (por ejemplo cron-job.org) para invocar:
 
 - `GET /api/cron/sync`
-- Header requerido: `Authorization: Bearer <CRON_SECRET>`
+- Header recomendado: `Authorization: Bearer <CRON_SECRET>`
+- Tambien valido: `Authorization: <CRON_SECRET>` o `x-cron-secret: <CRON_SECRET>`
+
+Si recibes `401 Unauthorized`, revisa que el valor del header coincida exactamente con `CRON_SECRET` en Vercel.
 
 Variables que debes configurar en Vercel:
 - `DATABASE_URL`
