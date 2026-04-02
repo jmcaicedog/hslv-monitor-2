@@ -57,8 +57,9 @@ Arquitectura objetivo:
 
 1. `DATABASE_URL`: conexion a PostgreSQL en Neon.
 2. `UBIBOT_ACCOUNT_KEY`: clave de Ubibot para sincronizacion periodica.
-3. `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional): mapa JSON de `channel_id -> api_key` para usar `/feeds` y obtener series completas por canal.
+3. `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional): mapa JSON de `channel_id -> api_key` para priorizar `/feeds` por canal cuando exista una llave dedicada.
 4. `CRON_SECRET`: secreto para proteger el endpoint `/api/cron/sync`.
+5. `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional): cantidad de lecturas historicas por canal a solicitar en `/feeds` (default: `2016`, cubre aprox. 7 dias si el sensor reporta cada 5 minutos).
 
 ### Inicializacion de base de datos
 
@@ -76,8 +77,8 @@ Este comando actualiza catalogo de sensores y agrega/actualiza lecturas reciente
 
 Notas de sincronizacion Ubibot:
 - Si solo usas `UBIBOT_ACCOUNT_KEY`, algunos canales pueden devolver datos parciales en `/summary` (por ejemplo solo `field4`).
-- Para obtener series completas (temperatura/humedad/voltaje/etc.) configura `UBIBOT_CHANNEL_API_KEYS_JSON` con la `api_key` de cada canal.
-- El script intenta primero `/feeds` con `api_key` por canal y, si no existe o falla, hace fallback a `/summary`.
+- El script intenta `/feeds` con `account_key`; si existe `api_key` por canal, la prioriza para ese sensor.
+- Si `/feeds` no devuelve lecturas, hace fallback a `/summary`.
 
 ### Cron externo (recomendado)
 
@@ -95,11 +96,13 @@ Variables que debes configurar en Vercel:
 - `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
 - `CRON_SECRET`
 - `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `10`)
+- `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional, recomendado inicial: `2016`)
 
 Recomendacion operativa para evitar `429` y completar datos en iteraciones:
 - Configura `CRON_MAX_CHANNELS_PER_RUN=10` (o 12 maximo).
 - Programa el cron cada 10 minutos.
 - El sistema prioriza sensores pendientes de corrida anterior y los reintenta automaticamente.
+- Con limite por corrida activo, los canales se procesan en rotacion entre ejecuciones para evitar que siempre se sincronicen los mismos primeros sensores.
 
 ### Operacion sugerida
 

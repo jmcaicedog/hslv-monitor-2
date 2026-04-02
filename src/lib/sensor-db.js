@@ -55,6 +55,14 @@ export async function ensureSensorSchema() {
       ON sync_pending_sensors(next_retry_at ASC);
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS sync_runtime_state (
+      state_key TEXT PRIMARY KEY,
+      cursor INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   schemaEnsured = true;
 }
 

@@ -2,11 +2,16 @@ import { ensureSensorSchema } from "./sensor-db.js";
 import { query } from "./db.js";
 
 const BATCH_SIZE = 1000;
-const FEEDS_RESULTS_LIMIT = 288;
+const DEFAULT_FEEDS_RESULTS_LIMIT = 2016;
+const FEEDS_RESULTS_LIMIT = parsePositiveInt(
+  process.env.UBIBOT_FEEDS_RESULTS_LIMIT,
+  DEFAULT_FEEDS_RESULTS_LIMIT
+);
 const UBIBOT_MAX_RETRIES = 3;
 const UBIBOT_RETRY_BACKOFF_MS = 4000;
 const UBIBOT_ENABLE_RETRY = process.env.UBIBOT_ENABLE_RETRY === "true";
 const PENDING_RETRY_BATCH_LIMIT = 200;
+const SYNC_CURSOR_STATE_KEY = "channel_cursor";
 
 function parsePositiveInt(raw, fallback = 0) {
   const parsed = Number(raw);
@@ -176,26 +181,65 @@ async function upsertReadings(rows, source) {
   );
 }
 
-async function fetchFeedsWithApiKey({ sensorId, apiKey }) {
-  if (!apiKey) {
-    return { ok: false, status: 0, feeds: [] };
+async function fetchFeedsSeries({ sensorId, apiKey, accountKey }) {
+  const attempts = [];
+
+  if (apiKey) {
+    attempts.push({
+      label: `feeds sensor ${sensorId} (channel api_key)`,
+      params: { api_key: apiKey },
+      source: "api_feed_channel_key",
+    });
   }
 
-  const result = await fetchJsonWithRetry(
-    `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?api_key=${encodeURIComponent(apiKey)}&results=${FEEDS_RESULTS_LIMIT}`,
-    { label: `feeds sensor ${sensorId}` }
-  );
-
-  if (!result.ok) {
-    return { ok: false, status: result.status, feeds: [] };
+  if (accountKey) {
+    attempts.push({
+      label: `feeds sensor ${sensorId} (account_key)`,
+      params: { account_key: accountKey },
+      source: "api_feed_account_key",
+    });
   }
 
-  const payload = result.payload || {};
-  return {
-    ok: true,
-    status: result.status,
-    feeds: payload.feeds || [],
-  };
+  if (attempts.length === 0) {
+    return { ok: false, status: 0, feeds: [], source: null };
+  }
+
+  let lastStatus = 0;
+
+  for (const attempt of attempts) {
+    const params = new URLSearchParams();
+    params.set("results", String(FEEDS_RESULTS_LIMIT));
+
+    Object.entries(attempt.params).forEach(([key, value]) => {
+      if (value) {
+        params.set(key, value);
+      }
+    });
+
+    const result = await fetchJsonWithRetry(
+      `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?${params.toString()}`,
+      { label: attempt.label }
+    );
+
+    if (!result.ok) {
+      lastStatus = result.status || lastStatus;
+      continue;
+    }
+
+    const payload = result.payload || {};
+    const feeds = payload.feeds || [];
+
+    if (feeds.length > 0) {
+      return {
+        ok: true,
+        status: result.status,
+        feeds,
+        source: attempt.source,
+      };
+    }
+  }
+
+  return { ok: false, status: lastStatus, feeds: [], source: null };
 }
 
 async function getDuePendingSensorIds() {
@@ -213,6 +257,56 @@ async function getDuePendingSensorIds() {
   return rows
     .map((row) => Number(row.sensor_id))
     .filter((id) => Number.isFinite(id));
+}
+
+async function getChannelCursor() {
+  const { rows } = await query(
+    `
+      SELECT cursor
+      FROM sync_runtime_state
+      WHERE state_key = $1
+      LIMIT 1;
+    `,
+    [SYNC_CURSOR_STATE_KEY]
+  );
+
+  const cursor = Number(rows[0]?.cursor);
+  return Number.isFinite(cursor) ? Math.max(0, Math.floor(cursor)) : 0;
+}
+
+async function setChannelCursor(cursor) {
+  const safeCursor = Number.isFinite(cursor) ? Math.max(0, Math.floor(cursor)) : 0;
+
+  await query(
+    `
+      INSERT INTO sync_runtime_state (state_key, cursor, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (state_key)
+      DO UPDATE SET
+        cursor = EXCLUDED.cursor,
+        updated_at = NOW();
+    `,
+    [SYNC_CURSOR_STATE_KEY, safeCursor]
+  );
+}
+
+function sortChannelsById(channels) {
+  return [...channels].sort((a, b) => {
+    const aId = Number(a?.channel_id);
+    const bId = Number(b?.channel_id);
+
+    if (!Number.isFinite(aId) && !Number.isFinite(bId)) return 0;
+    if (!Number.isFinite(aId)) return 1;
+    if (!Number.isFinite(bId)) return -1;
+    return aId - bId;
+  });
+}
+
+function rotateChannels(channels, startIndex) {
+  if (channels.length === 0) return channels;
+
+  const normalizedStart = ((startIndex % channels.length) + channels.length) % channels.length;
+  return channels.slice(normalizedStart).concat(channels.slice(0, normalizedStart));
 }
 
 async function clearPendingSensor(sensorId) {
@@ -273,6 +367,8 @@ export async function runUbiBotSync(options = {}) {
   const channelsPayload = channelsResult.payload || {};
   const channels = channelsPayload.channels || [];
   const sensorFilter = parseSensorIdFilter(process.env.UBIBOT_ONLY_SENSOR_IDS);
+  const useChannelRotation = !sensorFilter && maxChannelsPerRun > 0;
+  const baseCursor = useChannelRotation ? await getChannelCursor() : 0;
   const duePendingSensorIds = await getDuePendingSensorIds();
   const duePendingSet = new Set(duePendingSensorIds);
   const channelById = new Map();
@@ -288,6 +384,11 @@ export async function runUbiBotSync(options = {}) {
     ? channels.filter((channel) => sensorFilter.has(Number(channel.channel_id)))
     : channels;
 
+  const sortedBaseChannels = sortChannelsById(baseChannels);
+  const rotatedBaseChannels = useChannelRotation
+    ? rotateChannels(sortedBaseChannels, baseCursor)
+    : sortedBaseChannels;
+
   const channelsToProcess = [];
   const seenIds = new Set();
 
@@ -300,7 +401,7 @@ export async function runUbiBotSync(options = {}) {
     seenIds.add(channelId);
   }
 
-  for (const channel of baseChannels) {
+  for (const channel of rotatedBaseChannels) {
     const channelId = Number(channel.channel_id);
     if (!Number.isFinite(channelId) || seenIds.has(channelId)) continue;
     channelsToProcess.push(channel);
@@ -317,6 +418,21 @@ export async function runUbiBotSync(options = {}) {
     if (!Number.isFinite(sensorId)) return count;
     return duePendingSet.has(sensorId) ? count + 1 : count;
   }, 0);
+
+  if (useChannelRotation && sortedBaseChannels.length > 0) {
+    const baseProcessedInThisRun = effectiveChannelsToProcess.reduce((count, channel) => {
+      const sensorId = Number(channel.channel_id);
+      if (!Number.isFinite(sensorId)) return count;
+      return duePendingSet.has(sensorId) ? count : count + 1;
+    }, 0);
+
+    const nextCursor =
+      sortedBaseChannels.length > 0
+        ? (baseCursor + baseProcessedInThisRun) % sortedBaseChannels.length
+        : 0;
+
+    await setChannelCursor(nextCursor);
+  }
 
   let totalInserted = 0;
   let syncedChannels = 0;
@@ -388,9 +504,10 @@ export async function runUbiBotSync(options = {}) {
       }
 
       const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
-      const feedsPayload = await fetchFeedsWithApiKey({
+      const feedsPayload = await fetchFeedsSeries({
         sensorId,
         apiKey: apiKeyForChannel,
+        accountKey,
       });
 
       let readings = [];
@@ -399,7 +516,7 @@ export async function runUbiBotSync(options = {}) {
 
       if (feedsPayload.ok && feedsPayload.feeds.length > 0) {
         readings = feedsPayload.feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
-        sourceForSeries = "api_feed";
+        sourceForSeries = feedsPayload.source || "api_feed";
         seriesFetchSucceeded = true;
       } else {
         const summaryResult = await fetchJsonWithRetry(
