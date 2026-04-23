@@ -153,7 +153,7 @@ export async function getSensorReadingsByRange({ sensorId, hours, month }) {
       FROM sensor_readings
       WHERE sensor_id = $1
       ${whereSql}
-      ORDER BY observed_at DESC;
+      ORDER BY observed_at ASC;
     `,
     params
   );

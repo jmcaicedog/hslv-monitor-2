@@ -84,7 +84,8 @@ const SensorDetail = () => {
             ...entry,
             timestamp: new Date(entry.timestamp).getTime(),
           }))
-          .filter((entry) => Number.isFinite(entry.timestamp));
+          .filter((entry) => Number.isFinite(entry.timestamp))
+          .sort((a, b) => a.timestamp - b.timestamp);
 
         setFilteredData(normalized);
       } catch (err) {
