@@ -22,6 +22,11 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
 
+  const normalizeMetric = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
   const filteredSensors = sensors.filter((sensor) => {
     const matchLocation = selectedLocation
       ? sensor.description === selectedLocation
@@ -44,19 +49,11 @@ export default function Home() {
 
         const formattedData = data.map((sensor) => ({
           ...sensor,
-          temperature: sensor.temperature
-            ? parseFloat(sensor.temperature).toFixed(2)
-            : "N/A",
-          humidity: sensor.humidity
-            ? parseFloat(sensor.humidity).toFixed(2)
-            : "N/A",
-          voltage: sensor.voltage
-            ? parseFloat(sensor.voltage).toFixed(2)
-            : "N/A",
-          pressure: sensor.pressure
-            ? parseFloat(sensor.pressure).toFixed(2)
-            : null,
-          light: sensor.light ? parseFloat(sensor.light).toFixed(2) : null,
+          temperature: normalizeMetric(sensor.temperature),
+          humidity: normalizeMetric(sensor.humidity),
+          voltage: normalizeMetric(sensor.voltage),
+          pressure: normalizeMetric(sensor.pressure),
+          light: normalizeMetric(sensor.light),
         }));
         setSensors(formattedData);
       } catch (error) {
@@ -121,9 +118,6 @@ export default function Home() {
                 <Card
                   key={sensor.id || sensor.title}
                   {...sensor}
-                  showPressureAndLight={
-                    sensor.pressure !== null && sensor.light !== null
-                  }
                   layout="iconsOnly"
                 />
               ))

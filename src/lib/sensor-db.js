@@ -74,7 +74,7 @@ export async function getSensorsOverview() {
         s.title,
         s.description,
         s.status,
-        r.observed_at,
+        r.last_observed_at AS observed_at,
         r.temperatura,
         r.humedad,
         r.voltaje,
@@ -82,11 +82,20 @@ export async function getSensorsOverview() {
         r.luz
       FROM sensors s
       LEFT JOIN LATERAL (
-        SELECT observed_at, temperatura, humedad, voltaje, presion, luz
+        SELECT
+          MAX(observed_at) AS last_observed_at,
+          (ARRAY_AGG(temperatura ORDER BY observed_at DESC)
+            FILTER (WHERE temperatura IS NOT NULL))[1] AS temperatura,
+          (ARRAY_AGG(humedad ORDER BY observed_at DESC)
+            FILTER (WHERE humedad IS NOT NULL))[1] AS humedad,
+          (ARRAY_AGG(voltaje ORDER BY observed_at DESC)
+            FILTER (WHERE voltaje IS NOT NULL))[1] AS voltaje,
+          (ARRAY_AGG(presion ORDER BY observed_at DESC)
+            FILTER (WHERE presion IS NOT NULL))[1] AS presion,
+          (ARRAY_AGG(luz ORDER BY observed_at DESC)
+            FILTER (WHERE luz IS NOT NULL))[1] AS luz
         FROM sensor_readings
         WHERE sensor_id = s.id
-        ORDER BY observed_at DESC
-        LIMIT 1
       ) r ON TRUE
       ORDER BY s.title ASC;
     `
