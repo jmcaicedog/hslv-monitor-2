@@ -44,6 +44,23 @@ Notas:
 - El endpoint local `/api/auth/[...path]` actúa como proxy hacia Neon Auth.
 - Ya no se usa `NextAuth`, ni proveedores de Google en la app.
 
+## Control de acceso por roles
+
+La plataforma maneja dos roles:
+
+- `admin`: puede crear, editar rol, autorizar/bloquear y eliminar usuarios.
+- `user`: puede usar la plataforma, pero no administrar usuarios.
+
+Cambios clave:
+
+- El registro público (`/signup`) está deshabilitado.
+- La creación de usuarios se hace desde el panel `/admin/users`.
+- El usuario admin puede autorizar o bloquear cuentas (bloqueado = sin acceso).
+
+Requisito importante:
+
+- Debes tener al menos un usuario con rol `admin` en Neon Auth para acceder al panel de administración.
+
 ## Estrategia de datos (Neon)
 
 La app ahora consulta sensores e historicos desde Neon. No consulta CSV ni API Ubibot desde la UI.

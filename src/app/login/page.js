@@ -117,10 +117,7 @@ export default function LoginPage() {
           </div>
 
           <div className="text-center text-sm text-gray-300">
-            No tienes cuenta?{" "}
-            <Link href="/signup" className="underline hover:text-white">
-              Registrate
-            </Link>
+            Si necesitas acceso, solicita tu cuenta al administrador.
           </div>
         </form>
       </div>

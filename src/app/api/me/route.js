@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { ensureSensorSchema, getSensorsOverview } from "@/lib/sensor-db";
 import { getCurrentUser } from "@/lib/auth-server";
 
 export const dynamic = "force-dynamic";
@@ -12,13 +11,18 @@ export async function GET() {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    await ensureSensorSchema();
-    const sensors = await getSensorsOverview();
-    return NextResponse.json({ sensors });
+    return NextResponse.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role || "user",
+      },
+    });
   } catch (error) {
-    console.error("Error al consultar sensores desde DB:", error);
+    console.error("Error consultando sesion del usuario:", error);
     return NextResponse.json(
-      { error: "No se pudo consultar sensores en la base de datos." },
+      { error: "No se pudo consultar la sesion." },
       { status: 500 }
     );
   }

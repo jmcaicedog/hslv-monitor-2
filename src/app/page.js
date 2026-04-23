@@ -4,9 +4,10 @@ import Layout from "@/components/Layout";
 import Card from "@/components/Card";
 import SearchBar from "@/components/SearchBar";
 import Sidebar from "@/components/Sidebar";
-import { fetchSensorsData } from "@/utils/api";
-import { LogOut } from "lucide-react";
+import { fetchCurrentUser, fetchSensorsData } from "@/utils/api";
+import { LogOut, Users } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import Link from "next/link";
 
 export default function Home() {
   const sessionState = authClient.useSession();
@@ -19,6 +20,7 @@ export default function Home() {
   const [sensors, setSensors] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const filteredSensors = sensors.filter((sensor) => {
     const matchLocation = selectedLocation
@@ -33,7 +35,13 @@ export default function Home() {
   useEffect(() => {
     async function loadSensors() {
       try {
-        const data = await fetchSensorsData();
+        const [data, me] = await Promise.all([
+          fetchSensorsData(),
+          fetchCurrentUser().catch(() => null),
+        ]);
+
+        setIsAdmin(me?.user?.role === "admin");
+
         const formattedData = data.map((sensor) => ({
           ...sensor,
           temperature: sensor.temperature
@@ -81,7 +89,16 @@ export default function Home() {
             <p className="text-white p-4">Cargando ubicaciones...</p>
           )}
         </div>
-        <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6">
+        <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6 flex items-center gap-2">
+          {isAdmin && (
+            <Link
+              href="/admin/users"
+              className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full flex items-center shadow-lg"
+              title="Administrar usuarios"
+            >
+              <Users size={20} />
+            </Link>
+          )}
           <button
             onClick={() => authClient.signOut()}
             className="bg-red-600 hover:bg-red-500 text-white p-2 rounded-full flex items-center shadow-lg"

@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
 import { ensureSensorSchema, getSensorReadingsByRange } from "@/lib/sensor-db";
+import { getCurrentUser } from "@/lib/auth-server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request, context) {
   try {
+    const user = await getCurrentUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
+
     await ensureSensorSchema();
 
     const params = await context.params;
