@@ -61,6 +61,45 @@ Requisito importante:
 
 - Debes tener al menos un usuario con rol `admin` en Neon Auth para acceder al panel de administración.
 
+## Notificaciones por umbral
+
+La app ahora integra internamente las alertas por correo que antes corrían en un script externo.
+
+### Configuracion desde interfaz
+
+- Ruta admin: `/admin/alerts`
+- Solo usuarios con rol `admin` pueden editar:
+	- `EMAIL_FROM`
+	- `EMAIL_TO` (separados por `|`)
+	- `TEMP_MIN`, `TEMP_MAX`
+	- `HUM_MIN`, `HUM_MAX`
+	- `VOLT_MIN`
+	- Activacion/desactivacion de alertas
+
+La configuracion queda persistida en la base de datos (tabla `alert_config`).
+
+### Ejecucion por cron externo
+
+Al igual que la sincronizacion, el envio de alertas se dispara desde un cron externo llamando:
+
+- `GET /api/cron/alerts`
+
+Autorizacion soportada:
+
+- `Authorization: Bearer <CRON_SECRET>`
+- `Authorization: <CRON_SECRET>`
+- `x-cron-secret: <CRON_SECRET>`
+
+Variables de entorno requeridas para esta funcionalidad:
+
+- `RESEND_API_KEY`
+- `CRON_SECRET`
+
+Notas:
+
+- Los umbrales y correos se leen desde DB, no desde variables de entorno en cada ejecucion.
+- Las variables de entorno de umbral (`TEMP_MIN`, etc.) se usan como valores iniciales solo al crear la configuracion por primera vez.
+
 ## Estrategia de datos (Neon)
 
 La app ahora consulta sensores e historicos desde Neon. No consulta CSV ni API Ubibot desde la UI.

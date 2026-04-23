@@ -1,9 +1,11 @@
 import "dotenv/config";
 import { ensureSensorSchema } from "../src/lib/sensor-db.js";
+import { ensureAlertConfigSchema } from "../src/lib/alert-config-db.js";
 
 async function main() {
   await ensureSensorSchema();
-  console.log("Esquema de sensores creado/verificado en Neon.");
+  await ensureAlertConfigSchema();
+  console.log("Esquema de sensores y alertas creado/verificado en Neon.");
 }
 
 main().catch((error) => {

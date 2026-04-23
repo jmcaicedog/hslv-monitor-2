@@ -5,7 +5,7 @@ import Card from "@/components/Card";
 import SearchBar from "@/components/SearchBar";
 import Sidebar from "@/components/Sidebar";
 import { fetchCurrentUser, fetchSensorsData } from "@/utils/api";
-import { LogOut, Users } from "lucide-react";
+import { Bell, LogOut, Users } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import Link from "next/link";
 
@@ -88,13 +88,22 @@ export default function Home() {
         </div>
         <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6 flex items-center gap-2">
           {isAdmin && (
-            <Link
-              href="/admin/users"
-              className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full flex items-center shadow-lg"
-              title="Administrar usuarios"
-            >
-              <Users size={20} />
-            </Link>
+            <>
+              <Link
+                href="/admin/users"
+                className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                title="Administrar usuarios"
+              >
+                <Users size={20} />
+              </Link>
+              <Link
+                href="/admin/alerts"
+                className="bg-amber-600 hover:bg-amber-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                title="Configurar notificaciones"
+              >
+                <Bell size={20} />
+              </Link>
+            </>
           )}
           <button
             onClick={() => authClient.signOut()}

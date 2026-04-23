@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Home } from "lucide-react";
+import { Bell, Home } from "lucide-react";
 import {
   createUser,
   deleteUser,
@@ -127,13 +127,22 @@ export default function AdminUsersPage() {
       <div className="mx-auto max-w-5xl space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Administracion de usuarios</h1>
-          <button
-            onClick={() => router.push("/")}
-            className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-full flex items-center shadow-lg"
-            title="Volver al inicio"
-          >
-            <Home size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push("/admin/alerts")}
+              className="bg-amber-600 hover:bg-amber-500 text-white p-2 rounded-full flex items-center shadow-lg"
+              title="Configurar notificaciones"
+            >
+              <Bell size={20} />
+            </button>
+            <button
+              onClick={() => router.push("/")}
+              className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-full flex items-center shadow-lg"
+              title="Volver al inicio"
+            >
+              <Home size={20} />
+            </button>
+          </div>
         </div>
 
         <form

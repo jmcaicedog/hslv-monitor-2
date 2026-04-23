@@ -76,6 +76,55 @@ export async function deleteUser(userId) {
   return data;
 }
 
+export async function fetchAlertsConfig() {
+  const response = await fetch("/api/admin/alerts-config", { cache: "no-store" });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo cargar la configuracion de alertas");
+  }
+
+  return data;
+}
+
+export async function updateAlertsConfig(payload) {
+  const response = await fetch("/api/admin/alerts-config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo guardar la configuracion");
+  }
+
+  return data;
+}
+
+export async function runAlertsCheckNow() {
+  const response = await fetch("/api/admin/alerts-run", {
+    method: "POST",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const detailFromList =
+      Array.isArray(data.errors) && data.errors.length > 0
+        ? data.errors.join(" | ")
+        : "";
+
+    throw new Error(
+      data.error || detailFromList || "No se pudo ejecutar la verificacion"
+    );
+  }
+
+  return data;
+}
+
 export async function fetchSensorReadings(sensorId, options = {}) {
   const params = new URLSearchParams();
 
