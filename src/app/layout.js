@@ -8,9 +8,14 @@ import "../styles/globals.css";
 export default function RootLayout({ children }) {
   useEffect(() => {
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch((err) => {
-        console.error("Service Worker registration failed:", err);
-      });
+      navigator.serviceWorker
+        .register("/sw.js?v=2")
+        .then((registration) => {
+          registration.update().catch(() => null);
+        })
+        .catch((err) => {
+          console.error("Service Worker registration failed:", err);
+        });
     }
   }, []);
 
