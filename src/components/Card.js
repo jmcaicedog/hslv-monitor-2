@@ -9,9 +9,9 @@ import {
   FaPowerOff,
 } from "react-icons/fa";
 import Link from "next/link";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
-export default function Card({
+function Card({
   id,
   title,
   temperature,
@@ -186,3 +186,5 @@ export default function Card({
     </div>
   );
 }
+
+export default memo(Card);

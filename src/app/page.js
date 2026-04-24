@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import Layout from "@/components/Layout";
 import Card from "@/components/Card";
 import SearchBar from "@/components/SearchBar";
@@ -21,21 +21,36 @@ export default function Home() {
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const deferredSearchTerm = useDeferredValue(searchTerm);
 
   const normalizeMetric = (value) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
   };
 
-  const filteredSensors = sensors.filter((sensor) => {
-    const matchLocation = selectedLocation
-      ? sensor.description === selectedLocation
-      : true;
-    const matchSearch = searchTerm
-      ? sensor.title.toLowerCase().includes(searchTerm.toLowerCase())
-      : true;
-    return matchLocation && matchSearch;
-  });
+  const uniqueLocations = useMemo(() => {
+    const set = new Set();
+    sensors.forEach((sensor) => {
+      if (sensor.description) {
+        set.add(sensor.description);
+      }
+    });
+    return Array.from(set);
+  }, [sensors]);
+
+  const filteredSensors = useMemo(() => {
+    const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+
+    return sensors.filter((sensor) => {
+      const matchLocation = selectedLocation
+        ? sensor.description === selectedLocation
+        : true;
+      const matchSearch = normalizedSearch
+        ? sensor.title.toLowerCase().includes(normalizedSearch)
+        : true;
+      return matchLocation && matchSearch;
+    });
+  }, [deferredSearchTerm, selectedLocation, sensors]);
 
   useEffect(() => {
     async function loadSensors() {
@@ -79,7 +94,7 @@ export default function Home() {
         <div className="w-0 lg:w-64 fixed h-full overflow-hidden bg-gray-800 text-white p-0 lg:p-4">
           {sensors.length > 0 ? (
             <Sidebar
-              locations={sensors.map((s) => s.description)}
+              locations={uniqueLocations}
               onSelectLocation={setSelectedLocation}
               itemSpacing="space-y-0"
             />

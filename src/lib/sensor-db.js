@@ -3,6 +3,22 @@ import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
 
+function parsePayloadMetric(payload, key) {
+  const raw = payload?.[key]?.value ?? payload?.[key] ?? null;
+
+  if (raw == null) {
+    return null;
+  }
+
+  const text = String(raw).trim();
+  if (!text || text.toLowerCase() === "null") {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(text.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export async function ensureSensorSchema() {
   if (schemaEnsured) {
     return;
@@ -77,53 +93,56 @@ export async function getSensorsOverview() {
         s.title,
         s.description,
         s.status,
+        s.last_payload,
         COALESCE(sas.active_alarm, FALSE) AS active_alarm,
         COALESCE(sas.silenced, FALSE) AS alarm_silenced,
         COALESCE(sas.active_metrics, '[]'::jsonb) AS active_metrics,
-        r.last_observed_at AS observed_at,
-        r.temperatura,
-        r.humedad,
-        r.voltaje,
-        r.presion,
-        r.luz
+        COALESCE(s.last_seen_at, lr.observed_at) AS observed_at,
+        lr.temperatura,
+        lr.humedad,
+        lr.voltaje,
+        lr.presion,
+        lr.luz
       FROM sensors s
       LEFT JOIN sensor_alarm_state sas ON sas.sensor_id = s.id
       LEFT JOIN LATERAL (
         SELECT
-          MAX(observed_at) AS last_observed_at,
-          (ARRAY_AGG(temperatura ORDER BY observed_at DESC)
-            FILTER (WHERE temperatura IS NOT NULL))[1] AS temperatura,
-          (ARRAY_AGG(humedad ORDER BY observed_at DESC)
-            FILTER (WHERE humedad IS NOT NULL))[1] AS humedad,
-          (ARRAY_AGG(voltaje ORDER BY observed_at DESC)
-            FILTER (WHERE voltaje IS NOT NULL))[1] AS voltaje,
-          (ARRAY_AGG(presion ORDER BY observed_at DESC)
-            FILTER (WHERE presion IS NOT NULL))[1] AS presion,
-          (ARRAY_AGG(luz ORDER BY observed_at DESC)
-            FILTER (WHERE luz IS NOT NULL))[1] AS luz
-        FROM sensor_readings
-        WHERE sensor_id = s.id
-      ) r ON TRUE
+          sr.observed_at,
+          sr.temperatura,
+          sr.humedad,
+          sr.voltaje,
+          sr.presion,
+          sr.luz
+        FROM sensor_readings sr
+        WHERE sr.sensor_id = s.id
+        ORDER BY sr.observed_at DESC
+        LIMIT 1
+      ) lr ON TRUE
       ORDER BY s.title ASC;
     `
   );
 
-  return rows.map((row) => ({
-    id: Number(row.id),
-    title: row.title,
-    description: row.description,
-    status: row.status,
-    activeAlarm: Boolean(row.active_alarm),
-    alarmSilenced: Boolean(row.alarm_silenced),
-    hasActiveAlarm: Boolean(row.active_alarm) && !Boolean(row.alarm_silenced),
-    activeAlarmMetrics: Array.isArray(row.active_metrics) ? row.active_metrics : [],
-    createdAt: row.observed_at,
-    temperature: row.temperatura,
-    humidity: row.humedad,
-    voltage: row.voltaje,
-    pressure: row.presion,
-    light: row.luz,
-  }));
+  return rows.map((row) => {
+    const payload =
+      row.last_payload && typeof row.last_payload === "object" ? row.last_payload : null;
+
+    return {
+      id: Number(row.id),
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      activeAlarm: Boolean(row.active_alarm),
+      alarmSilenced: Boolean(row.alarm_silenced),
+      hasActiveAlarm: Boolean(row.active_alarm) && !Boolean(row.alarm_silenced),
+      activeAlarmMetrics: Array.isArray(row.active_metrics) ? row.active_metrics : [],
+      createdAt: row.observed_at,
+      temperature: parsePayloadMetric(payload, "field1") ?? row.temperatura,
+      humidity: parsePayloadMetric(payload, "field2") ?? row.humedad,
+      voltage: parsePayloadMetric(payload, "field3") ?? row.voltaje,
+      pressure: parsePayloadMetric(payload, "field9") ?? row.presion,
+      light: parsePayloadMetric(payload, "field6") ?? row.luz,
+    };
+  });
 }
 
 export async function getSensorReadingsByRange({ sensorId, hours, month, startDate, endDate }) {
