@@ -1,8 +1,8 @@
 "use client";
 import { attendSensorAlarm, fetchSensorAlarmState, fetchSensorReadings } from "@/utils/api";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { FaTimes, FaDownload, FaFileCsv } from "react-icons/fa";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FaTimes, FaFileCsv, FaFilePdf } from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { useParams } from "next/navigation";
@@ -35,6 +35,59 @@ const unitMap = {
   presion: "KPa",
   luz: "lx",
 };
+
+function waitForNextFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+const CHART_MAX_POINTS = 420;
+
+function downsampleSeries(data, maxPoints = CHART_MAX_POINTS) {
+  if (!Array.isArray(data) || data.length <= maxPoints) {
+    return data;
+  }
+
+  const stride = Math.ceil(data.length / maxPoints);
+  const sampled = [];
+
+  for (let i = 0; i < data.length; i += stride) {
+    sampled.push(data[i]);
+  }
+
+  const last = data[data.length - 1];
+  if (sampled[sampled.length - 1] !== last) {
+    sampled.push(last);
+  }
+
+  return sampled;
+}
+
+function formatTooltipDate(value) {
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) {
+    return String(value ?? "");
+  }
+
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatTooltipValue(value, metricKey) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return value;
+  }
+
+  const unit = unitMap[metricKey] ? ` ${unitMap[metricKey]}` : "";
+  return `${numeric.toFixed(2)}${unit}`;
+}
 
 function escapeCsvCell(value) {
   const text = String(value ?? "");
@@ -245,73 +298,92 @@ function addCanvasAsBlock(doc, canvas, options = {}) {
   return yOffset + renderHeightMm + elementGap;
 }
 
-async function renderTableChunksAsCanvases(container, options = {}) {
-  const rowsPerChunk = Math.max(1, Number(options.rowsPerChunk) || 12);
-  const scale = Number(options.scale) || 1;
-  const title = container.querySelector("h2");
-  const table = container.querySelector("table");
+function drawPdfMetricTable(doc, {
+  metricTitle,
+  rows,
+  startY,
+  topMargin,
+  marginLeft,
+  marginRight,
+  marginBottom,
+  onNewPage,
+}) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const contentWidth = pageWidth - marginLeft - marginRight;
+  const colWidths = [contentWidth * 0.34, contentWidth * 0.33, contentWidth * 0.33];
+  const rowHeight = 6;
+  const sectionGap = 4;
 
-  if (!table) {
-    return [await renderElementCanvas(container, scale)];
-  }
+  let y = startY;
 
-  const thead = table.querySelector("thead");
-  const rows = Array.from(table.querySelectorAll("tbody tr"));
-
-  if (rows.length === 0) {
-    return [await renderElementCanvas(container, scale)];
-  }
-
-  const widthPx = Math.ceil(container.getBoundingClientRect().width);
-  const canvases = [];
-
-  for (let start = 0; start < rows.length; start += rowsPerChunk) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "bg-white rounded-lg border border-gray-300 p-4";
-    wrapper.style.width = `${widthPx}px`;
-    wrapper.style.boxSizing = "border-box";
-    wrapper.style.background = "#ffffff";
-
-    if (title) {
-      wrapper.appendChild(title.cloneNode(true));
+  const ensureSpace = (requiredHeight) => {
+    if (y + requiredHeight <= pageHeight - marginBottom) {
+      return;
     }
 
-    const tableClone = document.createElement("table");
-    tableClone.className = table.className;
-    tableClone.style.width = "100%";
-    tableClone.style.borderCollapse = "collapse";
+    doc.addPage();
+    if (typeof onNewPage === "function") {
+      onNewPage(doc);
+    }
+    y = topMargin;
+  };
 
-    if (thead) {
-      tableClone.appendChild(thead.cloneNode(true));
+  const drawTableHeader = () => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(metricTitle, marginLeft + contentWidth / 2, y, { align: "center" });
+    y += 4;
+
+    doc.setFillColor(243, 244, 246);
+    doc.rect(marginLeft, y, contentWidth, rowHeight, "F");
+    doc.rect(marginLeft, y, contentWidth, rowHeight);
+
+    doc.setFontSize(9);
+    doc.text("Fecha", marginLeft + 2, y + 4);
+    doc.text("Minimo", marginLeft + colWidths[0] + 2, y + 4);
+    doc.text("Maximo", marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
+
+    doc.line(marginLeft + colWidths[0], y, marginLeft + colWidths[0], y + rowHeight);
+    doc.line(
+      marginLeft + colWidths[0] + colWidths[1],
+      y,
+      marginLeft + colWidths[0] + colWidths[1],
+      y + rowHeight
+    );
+
+    y += rowHeight;
+    doc.setFont("helvetica", "normal");
+  };
+
+  ensureSpace(16);
+  drawTableHeader();
+
+  for (const row of rows) {
+    ensureSpace(rowHeight + 2);
+
+    if (y === topMargin) {
+      drawTableHeader();
     }
 
-    const tbody = document.createElement("tbody");
-    rows.slice(start, start + rowsPerChunk).forEach((row) => {
-      tbody.appendChild(row.cloneNode(true));
-    });
-    tableClone.appendChild(tbody);
+    doc.rect(marginLeft, y, contentWidth, rowHeight);
+    doc.line(marginLeft + colWidths[0], y, marginLeft + colWidths[0], y + rowHeight);
+    doc.line(
+      marginLeft + colWidths[0] + colWidths[1],
+      y,
+      marginLeft + colWidths[0] + colWidths[1],
+      y + rowHeight
+    );
 
-    wrapper.appendChild(tableClone);
+    doc.setFontSize(8);
+    doc.text(String(row.date || ""), marginLeft + 2, y + 4);
+    doc.text(String(row.minText || ""), marginLeft + colWidths[0] + 2, y + 4);
+    doc.text(String(row.maxText || ""), marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
 
-    const host = document.createElement("div");
-    host.style.position = "fixed";
-    host.style.left = "-20000px";
-    host.style.top = "0";
-    host.style.zIndex = "-1";
-    host.style.background = "#ffffff";
-    host.appendChild(wrapper);
-
-    document.body.appendChild(host);
-
-    try {
-      const canvas = await renderElementCanvas(wrapper, scale);
-      canvases.push(canvas);
-    } finally {
-      document.body.removeChild(host);
-    }
+    y += rowHeight;
   }
 
-  return canvases;
+  return y + sectionGap;
 }
 
 const SensorDetail = () => {
@@ -322,11 +394,40 @@ const SensorDetail = () => {
   const [sensorName, setSensorName] = useState("");
   const [timeRange, setTimeRange] = useState(24);
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [appliedStartDate, setAppliedStartDate] = useState("");
+  const [appliedEndDate, setAppliedEndDate] = useState("");
+  const [availableStartDate, setAvailableStartDate] = useState("");
+  const [availableEndDate, setAvailableEndDate] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [alarmState, setAlarmState] = useState(null);
   const [attendingAlarm, setAttendingAlarm] = useState(false);
   const [alarmFeedback, setAlarmFeedback] = useState("");
+  const [tablePageByMetric, setTablePageByMetric] = useState({});
+  const [pdfProgress, setPdfProgress] = useState({
+    running: false,
+    percent: 0,
+    message: "",
+  });
+  const [csvProgress, setCsvProgress] = useState({
+    running: false,
+    percent: 0,
+    message: "",
+  });
+  const didInitDateBoundsRef = useRef(false);
+  const rowsPerTablePage = 20;
+
+  useEffect(() => {
+    didInitDateBoundsRef.current = false;
+    setStartDate("");
+    setEndDate("");
+    setAppliedStartDate("");
+    setAppliedEndDate("");
+    setAvailableStartDate("");
+    setAvailableEndDate("");
+  }, [id]);
 
   const getLast12Months = () => {
     const now = new Date();
@@ -349,20 +450,51 @@ const SensorDetail = () => {
     if (!id) return;
 
     const fetchData = async () => {
+      const hasCustomRange = Boolean(appliedStartDate) && Boolean(appliedEndDate);
+
+      if (hasCustomRange && appliedStartDate > appliedEndDate) {
+        setError("La fecha inicial debe ser menor o igual a la fecha final.");
+        return;
+      }
+
       setIsLoading(true);
       setError("");
 
       try {
         const [payload, alarmPayload] = await Promise.all([
           fetchSensorReadings(id, {
-            month: selectedMonth,
-            hours: selectedMonth ? undefined : timeRange,
+            startDate: hasCustomRange ? appliedStartDate : undefined,
+            endDate: hasCustomRange ? appliedEndDate : undefined,
+            month: hasCustomRange ? undefined : selectedMonth,
+            hours: hasCustomRange || selectedMonth ? undefined : timeRange,
           }),
           fetchSensorAlarmState(id).catch(() => ({ alarm: null })),
         ]);
 
         setSensorName(payload.sensorName || id);
         setAlarmState(alarmPayload?.alarm || null);
+
+        const firstDate = payload.firstObservedAt
+          ? new Date(payload.firstObservedAt).toISOString().slice(0, 10)
+          : "";
+        const lastDate = payload.lastObservedAt
+          ? new Date(payload.lastObservedAt).toISOString().slice(0, 10)
+          : "";
+
+        setAvailableStartDate(firstDate);
+        setAvailableEndDate(lastDate);
+
+        if (!didInitDateBoundsRef.current) {
+          if (firstDate) {
+            setStartDate(firstDate);
+          }
+
+          if (lastDate) {
+            setEndDate(lastDate);
+          }
+
+          didInitDateBoundsRef.current = true;
+        }
 
         const normalized = (payload.data || [])
           .map((entry) => ({
@@ -382,7 +514,24 @@ const SensorDetail = () => {
     };
 
     fetchData();
-  }, [id, timeRange, selectedMonth]);
+  }, [id, timeRange, selectedMonth, appliedStartDate, appliedEndDate]);
+
+  function handleApplyDateRange() {
+    if (!startDate || !endDate) {
+      setError("Debes seleccionar fecha inicial y final.");
+      return;
+    }
+
+    if (startDate > endDate) {
+      setError("La fecha inicial debe ser menor o igual a la fecha final.");
+      return;
+    }
+
+    setSelectedMonth(null);
+    setAppliedStartDate(startDate);
+    setAppliedEndDate(endDate);
+    setError("");
+  }
 
   async function handleAttendAlarm() {
     if (!id) return;
@@ -440,7 +589,28 @@ const SensorDetail = () => {
     }, {});
   }, [dailyMinMax, filteredData]);
 
+  const chartSeriesByMetric = useMemo(() => {
+    const byMetric = {};
+
+    Object.keys(dailyMinMax).forEach((key) => {
+      const rawSeries = filteredData.filter(
+        (d) => d[key] != null && !Number.isNaN(parseFloat(d[key]))
+      );
+      byMetric[key] = downsampleSeries(rawSeries, CHART_MAX_POINTS);
+    });
+
+    return byMetric;
+  }, [dailyMinMax, filteredData]);
+
+  useEffect(() => {
+    setTablePageByMetric({});
+  }, [dailyMinMax]);
+
   const reportRangeLabel = useMemo(() => {
+    if (appliedStartDate && appliedEndDate) {
+      return `Rango: ${appliedStartDate} a ${appliedEndDate}`;
+    }
+
     if (selectedMonth) {
       const [yearStr, monthStr] = String(selectedMonth).split("-");
       const year = Number(yearStr);
@@ -465,20 +635,32 @@ const SensorDetail = () => {
     };
 
     return `Periodo: ${rangeMap[timeRange] || `Ultimas ${timeRange} horas`}`;
-  }, [selectedMonth, timeRange]);
+  }, [selectedMonth, timeRange, appliedStartDate, appliedEndDate]);
 
   async function handleDownloadPDF() {
-    const doc = new jsPDF({
-      orientation: "portrait",
-      unit: "mm",
-      format: "a4",
-      compress: true,
+    if (pdfProgress.running) {
+      return;
+    }
+
+    setPdfProgress({
+      running: true,
+      percent: 3,
+      message: "Preparando exportacion PDF...",
     });
+    await waitForNextFrame();
 
-    const generatedAt = new Date().toLocaleString("es-ES");
-    const sensorTitle = sensorName || String(id || "Sensor");
+    try {
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+        compress: true,
+      });
 
-    const drawReportHeader = (instance) => {
+      const generatedAt = new Date().toLocaleString("es-ES");
+      const sensorTitle = sensorName || String(id || "Sensor");
+
+      const drawReportHeader = (instance) => {
       instance.setTextColor(20, 20, 20);
       instance.setFont("helvetica", "bold");
       instance.setFontSize(16);
@@ -493,37 +675,26 @@ const SensorDetail = () => {
       instance.line(10, 28, 200, 28);
     };
 
-    drawReportHeader(doc);
+      drawReportHeader(doc);
 
-    const elements = document.querySelectorAll(".sensor-chart, .data-table");
-    let yOffset = 32;
+      const chartElements = document.querySelectorAll(".sensor-chart");
+      let yOffset = 32;
 
-    const captureScale = 1;
+      const captureScale = 1;
 
-    for (let element of elements) {
-      if (element.classList.contains("data-table")) {
-        const chunks = await renderTableChunksAsCanvases(element, {
-          rowsPerChunk: 12,
-          scale: captureScale,
-        });
+      const metricKeys = Object.keys(dailyMinMax);
+      const totalSteps = Math.max(1, chartElements.length + metricKeys.length + 1);
+      let completedSteps = 0;
 
-        for (const chunkCanvas of chunks) {
-          yOffset = addCanvasAsBlock(doc, chunkCanvas, {
-            startY: yOffset,
-            topMargin: 32,
-            marginLeft: 10,
-            marginRight: 10,
-            marginBottom: 10,
-            elementGap: 8,
-            onNewPage: drawReportHeader,
-          });
-        }
+      for (const element of chartElements) {
+      setPdfProgress((prev) => ({
+        ...prev,
+        message: `Renderizando grafica ${completedSteps + 1}/${chartElements.length}...`,
+      }));
+      await waitForNextFrame();
 
-        continue;
-      }
-
-      const canvas = await renderElementCanvas(element, captureScale);
-      yOffset = addCanvasAsBlock(doc, canvas, {
+        const canvas = await renderElementCanvas(element, captureScale);
+        yOffset = addCanvasAsBlock(doc, canvas, {
         startY: yOffset,
         topMargin: 32,
         marginLeft: 10,
@@ -532,21 +703,101 @@ const SensorDetail = () => {
         elementGap: 8,
         onNewPage: drawReportHeader,
       });
+
+        completedSteps += 1;
+        setPdfProgress((prev) => ({
+        ...prev,
+        percent: Math.min(95, Math.round((completedSteps / totalSteps) * 100)),
+      }));
+      }
+
+      for (const key of metricKeys) {
+      setPdfProgress((prev) => ({
+        ...prev,
+        message: `Renderizando tabla de ${key}...`,
+      }));
+      await waitForNextFrame();
+
+        const sortedDates = Object.keys(dailyMinMax[key] || {}).sort((a, b) =>
+          a.localeCompare(b)
+        );
+
+        const rows = sortedDates.map((date) => ({
+          date,
+          min: Number(dailyMinMax[key][date]?.min),
+          max: Number(dailyMinMax[key][date]?.max),
+        }));
+
+        const metricTitle = `${key.charAt(0).toUpperCase() + key.slice(1)} (${unitMap[key] || ""})`;
+
+        yOffset = drawPdfMetricTable(doc, {
+          metricTitle,
+          rows: rows.map((row) => ({
+            ...row,
+            minText: Number.isFinite(row.min) ? `${row.min.toFixed(2)} (${unitMap[key] || ""})` : "",
+            maxText: Number.isFinite(row.max) ? `${row.max.toFixed(2)} (${unitMap[key] || ""})` : "",
+          })),
+          startY: yOffset,
+          topMargin: 32,
+          marginLeft: 10,
+          marginRight: 10,
+          marginBottom: 10,
+          onNewPage: drawReportHeader,
+        });
+
+        completedSteps += 1;
+        setPdfProgress((prev) => ({
+        ...prev,
+        percent: Math.min(95, Math.round((completedSteps / totalSteps) * 100)),
+      }));
+      }
+
+      setPdfProgress((prev) => ({
+        ...prev,
+        percent: 98,
+        message: "Finalizando archivo...",
+      }));
+      await waitForNextFrame();
+
+      const pdfBlob = doc.output("blob");
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.href = pdfUrl;
+      link.download = `sensor_${id}.pdf`;
+      link.click();
+      URL.revokeObjectURL(pdfUrl);
+
+      const sizeMb = (pdfBlob.size / (1024 * 1024)).toFixed(2);
+      console.info(`PDF generado: ${sizeMb} MB`);
+
+      setPdfProgress({
+        running: false,
+        percent: 100,
+        message: "PDF generado correctamente.",
+      });
+
+      setTimeout(() => {
+        setPdfProgress((prev) => (prev.running ? prev : { running: false, percent: 0, message: "" }));
+      }, 1200);
+    } catch (err) {
+      console.error("Error exportando PDF:", err);
+      setError("No se pudo generar el PDF. Intenta con un rango mas corto o vuelve a intentar.");
+      setPdfProgress({ running: false, percent: 0, message: "" });
     }
-
-    const pdfBlob = doc.output("blob");
-    const pdfUrl = URL.createObjectURL(pdfBlob);
-    const link = document.createElement("a");
-    link.href = pdfUrl;
-    link.download = `sensor_${id}.pdf`;
-    link.click();
-    URL.revokeObjectURL(pdfUrl);
-
-    const sizeMb = (pdfBlob.size / (1024 * 1024)).toFixed(2);
-    console.info(`PDF generado: ${sizeMb} MB`);
   }
 
-  function handleDownloadCSV() {
+  async function handleDownloadCSV() {
+    if (csvProgress.running) {
+      return;
+    }
+
+    setCsvProgress({
+      running: true,
+      percent: 3,
+      message: "Preparando exportacion CSV...",
+    });
+    await waitForNextFrame();
+
     const generatedAt = new Date().toLocaleString("es-ES");
     const sensorTitle = sensorName || String(id || "Sensor");
 
@@ -556,14 +807,25 @@ const SensorDetail = () => {
     lines.push(`Generado;${escapeCsvCell(generatedAt)}`);
     lines.push("");
 
-    Object.keys(dailyMinMax).forEach((key) => {
+    const metricKeys = Object.keys(dailyMinMax);
+    const totalSteps = Math.max(1, metricKeys.length + 1);
+    let completedSteps = 0;
+
+    for (const key of metricKeys) {
+      setCsvProgress((prev) => ({
+        ...prev,
+        message: `Procesando ${key}...`,
+        percent: Math.min(95, Math.round((completedSteps / totalSteps) * 100)),
+      }));
+      await waitForNextFrame();
+
       const unit = unitMap[key] || "";
       const dates = Object.keys(dailyMinMax[key] || {})
-        .sort((a, b) => a.localeCompare(b))
-        .slice(-30);
+        .sort((a, b) => a.localeCompare(b));
 
       if (dates.length === 0) {
-        return;
+        completedSteps += 1;
+        continue;
       }
 
       const metricName = `${key.charAt(0).toUpperCase() + key.slice(1)}${unit ? ` (${unit})` : ""}`;
@@ -584,7 +846,16 @@ const SensorDetail = () => {
       });
 
       lines.push("");
-    });
+
+      completedSteps += 1;
+    }
+
+    setCsvProgress((prev) => ({
+      ...prev,
+      percent: 98,
+      message: "Finalizando archivo CSV...",
+    }));
+    await waitForNextFrame();
 
     const csvContent = `\uFEFF${lines.join("\n")}`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -594,6 +865,16 @@ const SensorDetail = () => {
     link.download = `sensor_${id}_tablas.csv`;
     link.click();
     URL.revokeObjectURL(url);
+
+    setCsvProgress({
+      running: false,
+      percent: 100,
+      message: "CSV generado correctamente.",
+    });
+
+    setTimeout(() => {
+      setCsvProgress((prev) => (prev.running ? prev : { running: false, percent: 0, message: "" }));
+    }, 1200);
   }
 
   return (
@@ -609,16 +890,18 @@ const SensorDetail = () => {
             <FaTimes size={20} />{" "}
           </button>
           <button
-            className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600"
+            className="p-2 bg-red-600 text-white rounded-full hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-300"
             onClick={handleDownloadPDF}
+            disabled={pdfProgress.running}
             title="Exportar reporte PDF"
           >
             {" "}
-            <FaDownload size={20} />{" "}
+            <FaFilePdf size={20} />{" "}
           </button>
           <button
             className="p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-500"
             onClick={handleDownloadCSV}
+            disabled={csvProgress.running}
             title="Exportar tablas en CSV"
           >
             {" "}
@@ -626,6 +909,36 @@ const SensorDetail = () => {
           </button>
         </div>
       </div>
+
+      {pdfProgress.running || pdfProgress.message ? (
+        <div className="mb-4 rounded-md border border-gray-300 bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span>{pdfProgress.message || "Procesando PDF..."}</span>
+            <span>{pdfProgress.percent}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded bg-gray-200">
+            <div
+              className="h-full bg-red-600 transition-all duration-300"
+              style={{ width: `${Math.max(0, Math.min(100, pdfProgress.percent))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {csvProgress.running || csvProgress.message ? (
+        <div className="mb-4 rounded-md border border-gray-300 bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span>{csvProgress.message || "Procesando CSV..."}</span>
+            <span>{csvProgress.percent}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded bg-gray-200">
+            <div
+              className="h-full bg-emerald-600 transition-all duration-300"
+              style={{ width: `${Math.max(0, Math.min(100, csvProgress.percent))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {alarmState?.hasActiveAlarm ? (
         <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-4 text-red-800">
@@ -662,6 +975,10 @@ const SensorDetail = () => {
             onChange={(e) => {
               setTimeRange(Number(e.target.value));
               setSelectedMonth(null);
+              setStartDate("");
+              setEndDate("");
+              setAppliedStartDate("");
+              setAppliedEndDate("");
             }}
             className="border p-1 rounded"
           >
@@ -672,11 +989,50 @@ const SensorDetail = () => {
           </select>
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="mr-1">Rango:</label>
+          <input
+            type="date"
+            value={startDate}
+            min={availableStartDate || undefined}
+            max={endDate || availableEndDate || undefined}
+            onChange={(e) => {
+              setStartDate(e.target.value);
+            }}
+            className="border p-1 rounded"
+          />
+          <span>a</span>
+          <input
+            type="date"
+            value={endDate}
+            min={startDate || availableStartDate || undefined}
+            max={availableEndDate || undefined}
+            onChange={(e) => {
+              setEndDate(e.target.value);
+            }}
+            className="border p-1 rounded"
+          />
+          <button
+            type="button"
+            onClick={handleApplyDateRange}
+            className="rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
+            title="Aplicar rango de fechas"
+          >
+            Aplicar
+          </button>
+        </div>
+
         <div>
           <label className="mr-2">Selecciona el mes:</label>
           <select
             value={selectedMonth || ""}
-            onChange={(e) => setSelectedMonth(e.target.value)}
+            onChange={(e) => {
+              setSelectedMonth(e.target.value);
+              setStartDate("");
+              setEndDate("");
+              setAppliedStartDate("");
+              setAppliedEndDate("");
+            }}
             className="border p-1 rounded"
           >
             <option value="">Selecciona el mes</option>
@@ -720,9 +1076,7 @@ const SensorDetail = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {filteredData.length > 0 &&
           Object.keys(dailyMinMax).map((key) => {
-            const chartData = filteredData.filter(
-              (d) => d[key] != null && !Number.isNaN(parseFloat(d[key]))
-            );
+            const chartData = chartSeriesByMetric[key] || [];
 
             if (chartData.length === 0 || minMaxValues[key].min == null) {
               return null;
@@ -740,6 +1094,8 @@ const SensorDetail = () => {
                   <LineChart data={chartData}>
                     <XAxis
                       dataKey="timestamp"
+                      interval="preserveStartEnd"
+                      minTickGap={24}
                       tickFormatter={(time) => {
                         const date = new Date(time);
                         if (isNaN(date.getTime())) return "";
@@ -759,7 +1115,10 @@ const SensorDetail = () => {
                       tickFormatter={(value) => Number(value).toFixed(2)}
                     />
 
-                    <Tooltip />
+                    <Tooltip
+                      labelFormatter={(label) => formatTooltipDate(label)}
+                      formatter={(value, name) => [formatTooltipValue(value, name), name]}
+                    />
                     <CartesianGrid strokeDasharray="3 3" />
 
                     <Line
@@ -768,6 +1127,7 @@ const SensorDetail = () => {
                       stroke="#8884d8"
                       strokeWidth={2}
                       dot={false}
+                      isAnimationActive={false}
                     />
 
                     <ReferenceDot
@@ -781,8 +1141,9 @@ const SensorDetail = () => {
                       }
                       y={minMaxValues[key].min}
                       fill="red"
+                      isAnimationActive={false}
                       label={{
-                        value: `${minMaxValues[key].min}`,
+                        value: `${Number(minMaxValues[key].min).toFixed(2)}`,
                         position: "bottom",
                       }}
                     />
@@ -798,8 +1159,9 @@ const SensorDetail = () => {
                       }
                       y={minMaxValues[key].max}
                       fill="green"
+                      isAnimationActive={false}
                       label={{
-                        value: `${minMaxValues[key].max}`,
+                        value: `${Number(minMaxValues[key].max).toFixed(2)}`,
                         position: "bottom",
                       }}
                     />
@@ -810,31 +1172,38 @@ const SensorDetail = () => {
           })}
       </div>
       <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
-        {Object.keys(dailyMinMax).map((key) => (
-          <div
-            key={key}
-            className="bg-white shadow-md rounded-lg p-4 border border-gray-300 data-table"
-          >
-            <h2 className="text-lg text-center font-semibold">
-              {key.charAt(0).toUpperCase() + key.slice(1)} ({unitMap[key]})
-            </h2>
-            <table className="w-full mt-4 border-collapse border border-gray-300">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="border border-gray-300 p-2">Fecha</th>
-                  <th className="border border-gray-300 p-2">Mínimo</th>
-                  <th className="border border-gray-300 p-2">Máximo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.keys(dailyMinMax[key])
-                  .sort((a, b) => a.localeCompare(b))
-                  .slice(-30)
-                  .map((date) => (
+        {Object.keys(dailyMinMax).map((key) => {
+          const sortedDates = Object.keys(dailyMinMax[key] || {}).sort((a, b) =>
+            a.localeCompare(b)
+          );
+          const totalPages = Math.max(1, Math.ceil(sortedDates.length / rowsPerTablePage));
+          const currentPage = Math.min(
+            totalPages,
+            Math.max(1, Number(tablePageByMetric[key] || 1))
+          );
+          const startIndex = (currentPage - 1) * rowsPerTablePage;
+          const visibleDates = sortedDates.slice(startIndex, startIndex + rowsPerTablePage);
+
+          return (
+            <div
+              key={key}
+              className="bg-white shadow-md rounded-lg p-4 border border-gray-300 data-table"
+            >
+              <h2 className="text-lg text-center font-semibold">
+                {key.charAt(0).toUpperCase() + key.slice(1)} ({unitMap[key]})
+              </h2>
+              <table className="w-full mt-4 border-collapse border border-gray-300">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border border-gray-300 p-2">Fecha</th>
+                    <th className="border border-gray-300 p-2">Mínimo</th>
+                    <th className="border border-gray-300 p-2">Máximo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleDates.map((date) => (
                     <tr key={date}>
-                      <td className="border text-center border-gray-300 p-2">
-                        {date}
-                      </td>
+                      <td className="border text-center border-gray-300 p-2">{date}</td>
                       <td className="border text-center border-gray-300 p-2">
                         {dailyMinMax[key][date].min.toFixed(2)} ({unitMap[key]})
                       </td>
@@ -843,10 +1212,45 @@ const SensorDetail = () => {
                       </td>
                     </tr>
                   ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
+                </tbody>
+              </table>
+
+              {sortedDates.length > rowsPerTablePage ? (
+                <div className="mt-3 flex items-center justify-between gap-2 text-sm">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTablePageByMetric((prev) => ({
+                        ...prev,
+                        [key]: Math.max(1, currentPage - 1),
+                      }))
+                    }
+                    disabled={currentPage <= 1}
+                    className="rounded border border-gray-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Anterior
+                  </button>
+                  <span>
+                    Pagina {currentPage} de {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTablePageByMetric((prev) => ({
+                        ...prev,
+                        [key]: Math.min(totalPages, currentPage + 1),
+                      }))
+                    }
+                    disabled={currentPage >= totalPages}
+                    className="rounded border border-gray-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

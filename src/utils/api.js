@@ -158,7 +158,10 @@ export async function updateSensorAlertThresholds(payload) {
 export async function fetchSensorReadings(sensorId, options = {}) {
   const params = new URLSearchParams();
 
-  if (options.month) {
+  if (options.startDate && options.endDate) {
+    params.set("startDate", options.startDate);
+    params.set("endDate", options.endDate);
+  } else if (options.month) {
     params.set("month", options.month);
   } else {
     params.set("hours", String(options.hours || 24));

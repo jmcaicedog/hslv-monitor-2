@@ -27,11 +27,15 @@ export async function GET(request, context) {
     const url = new URL(request.url);
     const month = url.searchParams.get("month");
     const hours = url.searchParams.get("hours");
+    const startDate = url.searchParams.get("startDate");
+    const endDate = url.searchParams.get("endDate");
 
     const payload = await getSensorReadingsByRange({
       sensorId,
       hours,
       month,
+      startDate,
+      endDate,
     });
 
     return NextResponse.json(payload);

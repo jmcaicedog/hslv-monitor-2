@@ -126,7 +126,7 @@ export async function getSensorsOverview() {
   }));
 }
 
-export async function getSensorReadingsByRange({ sensorId, hours, month }) {
+export async function getSensorReadingsByRange({ sensorId, hours, month, startDate, endDate }) {
   const sensorMeta = await query(
     `SELECT id, title FROM sensors WHERE id = $1 LIMIT 1;`,
     [sensorId]
@@ -136,10 +136,61 @@ export async function getSensorReadingsByRange({ sensorId, hours, month }) {
     return { sensorName: String(sensorId), data: [] };
   }
 
+  const boundsResult = await query(
+    `
+      SELECT
+        MIN(observed_at) AS first_observed_at,
+        MAX(observed_at) AS last_observed_at
+      FROM sensor_readings
+      WHERE sensor_id = $1;
+    `,
+    [sensorId]
+  );
+
+  const firstObservedAt = boundsResult.rows[0]?.first_observed_at || null;
+  const lastObservedAt = boundsResult.rows[0]?.last_observed_at || null;
+
   let whereSql = "";
   let params = [sensorId];
+  let customRangeDays = 0;
+  let customRangeStart = null;
+  let customRangeEndExclusive = null;
 
-  if (month) {
+  const hasCustomRange = Boolean(startDate) && Boolean(endDate);
+
+  if (hasCustomRange) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(startDate))) {
+      throw new Error("Formato de fecha inicial invalido. Usa YYYY-MM-DD");
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(endDate))) {
+      throw new Error("Formato de fecha final invalido. Usa YYYY-MM-DD");
+    }
+
+    const start = new Date(`${startDate}T00:00:00.000Z`);
+    const endInclusive = new Date(`${endDate}T00:00:00.000Z`);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(endInclusive.getTime())) {
+      throw new Error("Rango de fechas invalido.");
+    }
+
+    if (start.getTime() > endInclusive.getTime()) {
+      throw new Error("La fecha inicial debe ser menor o igual a la fecha final.");
+    }
+
+    const endExclusive = new Date(endInclusive);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+
+    customRangeStart = start;
+    customRangeEndExclusive = endExclusive;
+    customRangeDays = Math.max(
+      1,
+      Math.ceil((endExclusive.getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
+    );
+
+    whereSql = "AND observed_at >= $2 AND observed_at < $3";
+    params = [sensorId, start.toISOString(), endExclusive.toISOString()];
+  } else if (month) {
     if (!/^\d{4}-\d{2}$/.test(month)) {
       throw new Error("Formato de mes invalido. Usa YYYY-MM");
     }
@@ -161,25 +212,63 @@ export async function getSensorReadingsByRange({ sensorId, hours, month }) {
     params = [sensorId, safeHours];
   }
 
-  const { rows } = await query(
-    `
-      SELECT
-        observed_at,
-        temperatura,
-        humedad,
-        voltaje,
-        presion,
-        luz
-      FROM sensor_readings
-      WHERE sensor_id = $1
-      ${whereSql}
-      ORDER BY observed_at ASC;
-    `,
-    params
-  );
+  const shouldAggregateCustomRange = hasCustomRange && customRangeDays > 14;
+
+  const { rows } = shouldAggregateCustomRange
+    ? await query(
+        `
+          SELECT
+            CASE
+              WHEN $4::int > 120 THEN date_trunc('day', observed_at)
+              WHEN $4::int > 45 THEN (
+                date_trunc('day', observed_at)
+                + ((EXTRACT(HOUR FROM observed_at)::int / 6) * INTERVAL '6 hour')
+              )
+              ELSE (
+                date_trunc('day', observed_at)
+                + ((EXTRACT(HOUR FROM observed_at)::int / 3) * INTERVAL '3 hour')
+              )
+            END AS observed_at,
+            AVG(temperatura) AS temperatura,
+            AVG(humedad) AS humedad,
+            AVG(voltaje) AS voltaje,
+            AVG(presion) AS presion,
+            AVG(luz) AS luz
+          FROM sensor_readings
+          WHERE sensor_id = $1
+            AND observed_at >= $2
+            AND observed_at < $3
+          GROUP BY 1
+          ORDER BY observed_at ASC;
+        `,
+        [
+          sensorId,
+          customRangeStart.toISOString(),
+          customRangeEndExclusive.toISOString(),
+          customRangeDays,
+        ]
+      )
+    : await query(
+        `
+          SELECT
+            observed_at,
+            temperatura,
+            humedad,
+            voltaje,
+            presion,
+            luz
+          FROM sensor_readings
+          WHERE sensor_id = $1
+          ${whereSql}
+          ORDER BY observed_at ASC;
+        `,
+        params
+      );
 
   return {
     sensorName: sensorMeta.rows[0].title,
+    firstObservedAt,
+    lastObservedAt,
     data: rows.map((row) => ({
       timestamp: row.observed_at,
       temperatura: row.temperatura,
