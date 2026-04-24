@@ -41,13 +41,27 @@ function parseEmailToInput(emailToInput) {
     .filter(Boolean);
 }
 
-function validateThresholdRange({ tempMin, tempMax, humMin, humMax, voltMin }) {
+function validateThresholdRange({
+  tempMin,
+  tempMax,
+  humMin,
+  humMax,
+  voltMin,
+  pressureMin,
+  pressureMax,
+  lightMin,
+  lightMax,
+}) {
   const numericFields = [
     [tempMin, "TEMP_MIN"],
     [tempMax, "TEMP_MAX"],
     [humMin, "HUM_MIN"],
     [humMax, "HUM_MAX"],
     [voltMin, "VOLT_MIN"],
+    [pressureMin, "PRESSURE_MIN"],
+    [pressureMax, "PRESSURE_MAX"],
+    [lightMin, "LIGHT_MIN"],
+    [lightMax, "LIGHT_MAX"],
   ];
 
   for (const [value, label] of numericFields) {
@@ -62,6 +76,14 @@ function validateThresholdRange({ tempMin, tempMax, humMin, humMax, voltMin }) {
 
   if (humMin >= humMax) {
     throw new Error("HUM_MIN debe ser menor que HUM_MAX.");
+  }
+
+  if (pressureMin >= pressureMax) {
+    throw new Error("PRESSURE_MIN debe ser menor que PRESSURE_MAX.");
+  }
+
+  if (lightMin >= lightMax) {
+    throw new Error("LIGHT_MIN debe ser menor que LIGHT_MAX.");
   }
 }
 
@@ -159,9 +181,33 @@ export async function ensureAlertConfigSchema() {
       hum_min DOUBLE PRECISION NOT NULL,
       hum_max DOUBLE PRECISION NOT NULL,
       volt_min DOUBLE PRECISION NOT NULL,
+      pressure_min DOUBLE PRECISION NOT NULL DEFAULT 0,
+      pressure_max DOUBLE PRECISION NOT NULL DEFAULT 1000,
+      light_min DOUBLE PRECISION NOT NULL DEFAULT 0,
+      light_max DOUBLE PRECISION NOT NULL DEFAULT 200000,
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await query(`
+    ALTER TABLE sensor_alert_thresholds
+    ADD COLUMN IF NOT EXISTS pressure_min DOUBLE PRECISION NOT NULL DEFAULT 0;
+  `);
+
+  await query(`
+    ALTER TABLE sensor_alert_thresholds
+    ADD COLUMN IF NOT EXISTS pressure_max DOUBLE PRECISION NOT NULL DEFAULT 1000;
+  `);
+
+  await query(`
+    ALTER TABLE sensor_alert_thresholds
+    ADD COLUMN IF NOT EXISTS light_min DOUBLE PRECISION NOT NULL DEFAULT 0;
+  `);
+
+  await query(`
+    ALTER TABLE sensor_alert_thresholds
+    ADD COLUMN IF NOT EXISTS light_max DOUBLE PRECISION NOT NULL DEFAULT 200000;
   `);
 
   const defaults = getDefaultConfigFromEnv();
@@ -211,6 +257,10 @@ async function ensureSensorThresholdRows() {
         hum_min,
         hum_max,
         volt_min,
+        pressure_min,
+        pressure_max,
+        light_min,
+        light_max,
         enabled,
         updated_at
       )
@@ -221,6 +271,10 @@ async function ensureSensorThresholdRows() {
         $3,
         $4,
         $5,
+        0,
+        1000,
+        0,
+        200000,
         TRUE,
         NOW()
       FROM sensors s
@@ -318,6 +372,12 @@ function mapSensorThresholdRow(row) {
     humMin: Number(row.hum_min),
     humMax: Number(row.hum_max),
     voltMin: Number(row.volt_min),
+    pressureMin: Number(row.pressure_min),
+    pressureMax: Number(row.pressure_max),
+    lightMin: Number(row.light_min),
+    lightMax: Number(row.light_max),
+    hasPressure: Boolean(row.has_pressure),
+    hasLight: Boolean(row.has_light),
     enabled: Boolean(row.enabled),
     updatedAt: row.updated_at,
   };
@@ -331,6 +391,10 @@ function normalizeSensorThresholdInput(payload = {}) {
     humMin: Number(payload.humMin),
     humMax: Number(payload.humMax),
     voltMin: Number(payload.voltMin),
+    pressureMin: Number(payload.pressureMin),
+    pressureMax: Number(payload.pressureMax),
+    lightMin: Number(payload.lightMin),
+    lightMax: Number(payload.lightMax),
     enabled: payload.enabled !== false,
   };
 
@@ -356,10 +420,51 @@ export async function getSensorAlertThresholds() {
       sat.hum_min,
       sat.hum_max,
       sat.volt_min,
+      sat.pressure_min,
+      sat.pressure_max,
+      sat.light_min,
+      sat.light_max,
+      (
+        COALESCE(sm.has_pressure, FALSE)
+        OR (
+          COALESCE(
+            NULLIF(BTRIM(s.last_payload -> 'field9' ->> 'value'), ''),
+            NULLIF(BTRIM(s.last_payload ->> 'field9'), '')
+          ) IS NOT NULL
+          AND LOWER(
+            COALESCE(
+              NULLIF(BTRIM(s.last_payload -> 'field9' ->> 'value'), ''),
+              NULLIF(BTRIM(s.last_payload ->> 'field9'), '')
+            )
+          ) <> 'null'
+        )
+      ) AS has_pressure,
+      (
+        COALESCE(sm.has_light, FALSE)
+        OR (
+          COALESCE(
+            NULLIF(BTRIM(s.last_payload -> 'field6' ->> 'value'), ''),
+            NULLIF(BTRIM(s.last_payload ->> 'field6'), '')
+          ) IS NOT NULL
+          AND LOWER(
+            COALESCE(
+              NULLIF(BTRIM(s.last_payload -> 'field6' ->> 'value'), ''),
+              NULLIF(BTRIM(s.last_payload ->> 'field6'), '')
+            )
+          ) <> 'null'
+        )
+      ) AS has_light,
       sat.enabled,
       sat.updated_at
     FROM sensors s
     INNER JOIN sensor_alert_thresholds sat ON sat.sensor_id = s.id
+    LEFT JOIN LATERAL (
+      SELECT
+        BOOL_OR(sr.presion IS NOT NULL) AS has_pressure,
+        BOOL_OR(sr.luz IS NOT NULL) AS has_light
+      FROM sensor_readings sr
+      WHERE sr.sensor_id = s.id
+    ) sm ON TRUE
     ORDER BY s.title ASC;
   `);
 
@@ -387,10 +492,14 @@ export async function updateSensorAlertThresholds(payload = {}) {
           hum_min,
           hum_max,
           volt_min,
+          pressure_min,
+          pressure_max,
+          light_min,
+          light_max,
           enabled,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
         ON CONFLICT (sensor_id)
         DO UPDATE SET
           temp_min = EXCLUDED.temp_min,
@@ -398,6 +507,10 @@ export async function updateSensorAlertThresholds(payload = {}) {
           hum_min = EXCLUDED.hum_min,
           hum_max = EXCLUDED.hum_max,
           volt_min = EXCLUDED.volt_min,
+          pressure_min = EXCLUDED.pressure_min,
+          pressure_max = EXCLUDED.pressure_max,
+          light_min = EXCLUDED.light_min,
+          light_max = EXCLUDED.light_max,
           enabled = EXCLUDED.enabled,
           updated_at = NOW();
       `,
@@ -408,6 +521,10 @@ export async function updateSensorAlertThresholds(payload = {}) {
         threshold.humMin,
         threshold.humMax,
         threshold.voltMin,
+        threshold.pressureMin,
+        threshold.pressureMax,
+        threshold.lightMin,
+        threshold.lightMax,
         threshold.enabled,
       ]
     );

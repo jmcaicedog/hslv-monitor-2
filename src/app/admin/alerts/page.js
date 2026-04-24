@@ -26,6 +26,10 @@ function createInitialBulkForm() {
   humMin: "40",
   humMax: "80",
   voltMin: "3.3",
+  pressureMin: "0",
+  pressureMax: "1000",
+  lightMin: "0",
+  lightMax: "200000",
   enabled: true,
   };
 }
@@ -110,6 +114,15 @@ export default function AdminAlertsPage() {
     setBulkForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  function getMetricInputClass(isDisabled, compact = false) {
+    const sizeClass = compact ? "w-20 px-1.5 py-1 text-xs" : "px-2 py-2";
+    const stateClass = isDisabled
+      ? "border-gray-700 bg-gray-800 text-gray-500 cursor-not-allowed"
+      : "border-gray-600 bg-gray-900";
+
+    return `rounded-md border ${sizeClass} ${stateClass}`;
+  }
+
   const filteredThresholds = sensorThresholds.filter((item) => {
     if (!sensorSearch) return true;
     return item.sensorName.toLowerCase().includes(sensorSearch.toLowerCase());
@@ -171,6 +184,10 @@ export default function AdminAlertsPage() {
           humMin: Number(item.humMin),
           humMax: Number(item.humMax),
           voltMin: Number(item.voltMin),
+          pressureMin: Number(item.pressureMin),
+          pressureMax: Number(item.pressureMax),
+          lightMin: Number(item.lightMin),
+          lightMax: Number(item.lightMax),
           enabled: Boolean(item.enabled),
         })),
       };
@@ -193,13 +210,21 @@ export default function AdminAlertsPage() {
     const humMin = Number(bulkForm.humMin);
     const humMax = Number(bulkForm.humMax);
     const voltMin = Number(bulkForm.voltMin);
+    const pressureMin = Number(bulkForm.pressureMin);
+    const pressureMax = Number(bulkForm.pressureMax);
+    const lightMin = Number(bulkForm.lightMin);
+    const lightMax = Number(bulkForm.lightMax);
 
     if (
       !Number.isFinite(tempMin) ||
       !Number.isFinite(tempMax) ||
       !Number.isFinite(humMin) ||
       !Number.isFinite(humMax) ||
-      !Number.isFinite(voltMin)
+      !Number.isFinite(voltMin) ||
+      !Number.isFinite(pressureMin) ||
+      !Number.isFinite(pressureMax) ||
+      !Number.isFinite(lightMin) ||
+      !Number.isFinite(lightMax)
     ) {
       setError("Los valores base deben ser numericos.");
       return;
@@ -212,6 +237,16 @@ export default function AdminAlertsPage() {
 
     if (humMin >= humMax) {
       setError("HUM_MIN debe ser menor que HUM_MAX en valores base.");
+      return;
+    }
+
+    if (pressureMin >= pressureMax) {
+      setError("PRESSURE_MIN debe ser menor que PRESSURE_MAX en valores base.");
+      return;
+    }
+
+    if (lightMin >= lightMax) {
+      setError("LIGHT_MIN debe ser menor que LIGHT_MAX en valores base.");
       return;
     }
 
@@ -235,6 +270,10 @@ export default function AdminAlertsPage() {
           humMin,
           humMax,
           voltMin,
+          pressureMin: item.hasPressure ? pressureMin : item.pressureMin,
+          pressureMax: item.hasPressure ? pressureMax : item.pressureMax,
+          lightMin: item.hasLight ? lightMin : item.lightMin,
+          lightMax: item.hasLight ? lightMax : item.lightMax,
           enabled: bulkForm.enabled,
         };
       })
@@ -261,8 +300,8 @@ export default function AdminAlertsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
-      <div className="mx-auto max-w-4xl space-y-6">
+    <div className="min-h-screen bg-gray-900 text-white p-4 md:p-6">
+      <div className="mx-auto max-w-[96rem] space-y-6">
         {(error || success) && (
           <div className="fixed top-4 right-4 z-[100]">
             <div
@@ -361,6 +400,38 @@ export default function AdminAlertsPage() {
                 className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
                 placeholder="VOLT_MIN"
               />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.pressureMin}
+                onChange={(event) => onBulkChange("pressureMin", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="PRESSURE_MIN"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.pressureMax}
+                onChange={(event) => onBulkChange("pressureMax", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="PRESSURE_MAX"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.lightMin}
+                onChange={(event) => onBulkChange("lightMin", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="LIGHT_MIN"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.lightMax}
+                onChange={(event) => onBulkChange("lightMax", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="LIGHT_MAX"
+              />
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex items-center gap-2 text-xs text-gray-300">
@@ -446,6 +517,54 @@ export default function AdminAlertsPage() {
                     className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2 col-span-2"
                     placeholder="VOLT_MIN"
                   />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.pressureMin}
+                    disabled={!item.hasPressure}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "pressureMin", event.target.value)
+                    }
+                    title={!item.hasPressure ? "Sensor sin medicion de presion" : undefined}
+                    className={getMetricInputClass(!item.hasPressure)}
+                    placeholder="PRESSURE_MIN"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.pressureMax}
+                    disabled={!item.hasPressure}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "pressureMax", event.target.value)
+                    }
+                    title={!item.hasPressure ? "Sensor sin medicion de presion" : undefined}
+                    className={getMetricInputClass(!item.hasPressure)}
+                    placeholder="PRESSURE_MAX"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.lightMin}
+                    disabled={!item.hasLight}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "lightMin", event.target.value)
+                    }
+                    title={!item.hasLight ? "Sensor sin medicion de luz" : undefined}
+                    className={getMetricInputClass(!item.hasLight)}
+                    placeholder="LIGHT_MIN"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.lightMax}
+                    disabled={!item.hasLight}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "lightMax", event.target.value)
+                    }
+                    title={!item.hasLight ? "Sensor sin medicion de luz" : undefined}
+                    className={getMetricInputClass(!item.hasLight)}
+                    placeholder="LIGHT_MAX"
+                  />
                 </div>
                 <label className="mt-3 inline-flex items-center gap-2 text-xs text-gray-300">
                   <input
@@ -461,23 +580,29 @@ export default function AdminAlertsPage() {
             ))}
           </div>
 
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="hidden md:block">
+            <table className="w-full table-fixed text-xs lg:text-sm">
               <thead>
                 <tr className="border-b border-gray-700 text-left text-gray-300">
-                  <th className="py-2 pr-2">Sensor</th>
+                  <th className="w-44 py-2 pr-2">Sensor</th>
                   <th className="py-2 pr-2">TEMP_MIN</th>
                   <th className="py-2 pr-2">TEMP_MAX</th>
                   <th className="py-2 pr-2">HUM_MIN</th>
                   <th className="py-2 pr-2">HUM_MAX</th>
                   <th className="py-2 pr-2">VOLT_MIN</th>
+                  <th className="py-2 pr-2">PRESSURE_MIN</th>
+                  <th className="py-2 pr-2">PRESSURE_MAX</th>
+                  <th className="py-2 pr-2">LIGHT_MIN</th>
+                  <th className="py-2 pr-2">LIGHT_MAX</th>
                   <th className="py-2 pr-2">Activo</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredThresholds.map((item) => (
                   <tr key={item.sensorId} className="border-b border-gray-800">
-                    <td className="py-2 pr-2">{item.sensorName}</td>
+                    <td className="py-2 pr-2 truncate" title={item.sensorName}>
+                      {item.sensorName}
+                    </td>
                     <td className="py-2 pr-2">
                       <input
                         type="number"
@@ -486,7 +611,7 @@ export default function AdminAlertsPage() {
                         onChange={(event) =>
                           onThresholdChange(item.sensorId, "tempMin", event.target.value)
                         }
-                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                        className={getMetricInputClass(false, true)}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -497,7 +622,7 @@ export default function AdminAlertsPage() {
                         onChange={(event) =>
                           onThresholdChange(item.sensorId, "tempMax", event.target.value)
                         }
-                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                        className={getMetricInputClass(false, true)}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -508,7 +633,7 @@ export default function AdminAlertsPage() {
                         onChange={(event) =>
                           onThresholdChange(item.sensorId, "humMin", event.target.value)
                         }
-                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                        className={getMetricInputClass(false, true)}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -519,7 +644,7 @@ export default function AdminAlertsPage() {
                         onChange={(event) =>
                           onThresholdChange(item.sensorId, "humMax", event.target.value)
                         }
-                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                        className={getMetricInputClass(false, true)}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -530,7 +655,59 @@ export default function AdminAlertsPage() {
                         onChange={(event) =>
                           onThresholdChange(item.sensorId, "voltMin", event.target.value)
                         }
-                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                        className={getMetricInputClass(false, true)}
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.pressureMin}
+                        disabled={!item.hasPressure}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "pressureMin", event.target.value)
+                        }
+                        title={!item.hasPressure ? "Sensor sin medicion de presion" : undefined}
+                        className={getMetricInputClass(!item.hasPressure, true)}
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.pressureMax}
+                        disabled={!item.hasPressure}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "pressureMax", event.target.value)
+                        }
+                        title={!item.hasPressure ? "Sensor sin medicion de presion" : undefined}
+                        className={getMetricInputClass(!item.hasPressure, true)}
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.lightMin}
+                        disabled={!item.hasLight}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "lightMin", event.target.value)
+                        }
+                        title={!item.hasLight ? "Sensor sin medicion de luz" : undefined}
+                        className={getMetricInputClass(!item.hasLight, true)}
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.lightMax}
+                        disabled={!item.hasLight}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "lightMax", event.target.value)
+                        }
+                        title={!item.hasLight ? "Sensor sin medicion de luz" : undefined}
+                        className={getMetricInputClass(!item.hasLight, true)}
                       />
                     </td>
                     <td className="py-2 pr-2">

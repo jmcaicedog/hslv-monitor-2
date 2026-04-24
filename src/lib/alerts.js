@@ -75,7 +75,9 @@ async function getLatestSensorValues() {
       COALESCE(NULLIF(s.title, ''), 'Sensor ' || s.id::text) AS sensor_name,
       t.temperatura,
       h.humedad,
-      v.voltaje
+      v.voltaje,
+      p.presion,
+      l.luz
     FROM sensors s
     LEFT JOIN LATERAL (
       SELECT temperatura
@@ -98,6 +100,20 @@ async function getLatestSensorValues() {
       ORDER BY observed_at DESC
       LIMIT 1
     ) v ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT presion
+      FROM sensor_readings
+      WHERE sensor_id = s.id AND presion IS NOT NULL
+      ORDER BY observed_at DESC
+      LIMIT 1
+    ) p ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT luz
+      FROM sensor_readings
+      WHERE sensor_id = s.id AND luz IS NOT NULL
+      ORDER BY observed_at DESC
+      LIMIT 1
+    ) l ON TRUE
     ORDER BY s.title ASC;
   `);
 
@@ -107,6 +123,8 @@ async function getLatestSensorValues() {
     temperature: asNumber(row.temperatura),
     humidity: asNumber(row.humedad),
     voltage: asNumber(row.voltaje),
+    pressure: asNumber(row.presion),
+    light: asNumber(row.luz),
   }));
 }
 
@@ -187,7 +205,7 @@ export async function runThresholdAlerts() {
     : 180;
 
   for (const sensor of sensorDataList) {
-    const { sensorId, sensorName, temperature, humidity, voltage } = sensor;
+    const { sensorId, sensorName, temperature, humidity, voltage, pressure, light } = sensor;
     const sensorThreshold = thresholdMap.get(sensorId);
 
     if (!sensorThreshold || sensorThreshold.enabled === false) {
@@ -261,6 +279,51 @@ export async function runThresholdAlerts() {
         alertStateMap.set(stateKey, new Date());
         sentAlerts += 1;
         await sleep(500);
+        }
+      }
+
+      if (
+        pressure !== null &&
+        (pressure < sensorThreshold.pressureMin || pressure > sensorThreshold.pressureMax)
+      ) {
+        const metricKey = "pressure";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
+          const message = `
+          El sensor <strong>${sensorName}</strong> ha registrado una presion de
+          <strong>${pressure} KPa</strong>, fuera del rango permitido de
+          ${sensorThreshold.pressureMin} KPa a ${sensorThreshold.pressureMax} KPa.`;
+
+          await sendEmailAlert(config, sensorName, "Presion Fuera de Rango", message);
+          await saveAlertState(sensorId, metricKey, pressure);
+          alertStateMap.set(stateKey, new Date());
+          sentAlerts += 1;
+          await sleep(500);
+        }
+      }
+
+      if (light !== null && (light < sensorThreshold.lightMin || light > sensorThreshold.lightMax)) {
+        const metricKey = "light";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
+          const message = `
+          El sensor <strong>${sensorName}</strong> ha registrado una iluminacion de
+          <strong>${light} lx</strong>, fuera del rango permitido de
+          ${sensorThreshold.lightMin} lx a ${sensorThreshold.lightMax} lx.`;
+
+          await sendEmailAlert(config, sensorName, "Luz Fuera de Rango", message);
+          await saveAlertState(sensorId, metricKey, light);
+          alertStateMap.set(stateKey, new Date());
+          sentAlerts += 1;
+          await sleep(500);
         }
       }
     } catch (error) {
