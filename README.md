@@ -74,9 +74,14 @@ La app ahora integra internamente las alertas por correo que antes corrían en u
 	- `TEMP_MIN`, `TEMP_MAX`
 	- `HUM_MIN`, `HUM_MAX`
 	- `VOLT_MIN`
+	- `COOLDOWN (min)` para evitar reenvios repetidos por el mismo sensor/variable
 	- Activacion/desactivacion de alertas
 
 La configuracion queda persistida en la base de datos (tabla `alert_config`).
+
+Adicionalmente, en la misma pantalla puedes configurar umbrales por sensor
+(`TEMP_MIN`, `TEMP_MAX`, `HUM_MIN`, `HUM_MAX`, `VOLT_MIN`) y activar/desactivar
+alertas sensor a sensor.
 
 ### Ejecucion por cron externo
 
@@ -99,6 +104,7 @@ Notas:
 
 - Los umbrales y correos se leen desde DB, no desde variables de entorno en cada ejecucion.
 - Las variables de entorno de umbral (`TEMP_MIN`, etc.) se usan como valores iniciales solo al crear la configuracion por primera vez.
+- El cooldown se aplica por sensor y variable (`temperature`, `humidity`, `voltage`) y evita alertas repetidas hasta que se cumpla el tiempo configurado.
 
 ## Estrategia de datos (Neon)
 

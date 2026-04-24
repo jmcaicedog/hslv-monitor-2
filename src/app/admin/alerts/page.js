@@ -6,20 +6,29 @@ import { Home, Users } from "lucide-react";
 import {
   fetchAlertsConfig,
   fetchCurrentUser,
+  fetchSensorAlertThresholds,
   runAlertsCheckNow,
   updateAlertsConfig,
+  updateSensorAlertThresholds,
 } from "@/utils/api";
 
 const initialForm = {
   emailFrom: "",
   emailToText: "",
+  cooldownMinutes: "180",
+  enabled: true,
+};
+
+function createInitialBulkForm() {
+  return {
   tempMin: "15",
   tempMax: "26",
   humMin: "40",
   humMax: "80",
   voltMin: "3.3",
   enabled: true,
-};
+  };
+}
 
 export default function AdminAlertsPage() {
   const router = useRouter();
@@ -30,6 +39,23 @@ export default function AdminAlertsPage() {
   const [success, setSuccess] = useState("");
   const [runResult, setRunResult] = useState(null);
   const [form, setForm] = useState(initialForm);
+  const [sensorThresholds, setSensorThresholds] = useState([]);
+  const [savingThresholds, setSavingThresholds] = useState(false);
+  const [sensorSearch, setSensorSearch] = useState("");
+  const [bulkForm, setBulkForm] = useState(createInitialBulkForm);
+
+  useEffect(() => {
+    if (!error && !success) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setError("");
+      setSuccess("");
+    }, 4500);
+
+    return () => clearTimeout(timeout);
+  }, [error, success]);
 
   useEffect(() => {
     async function load() {
@@ -43,19 +69,21 @@ export default function AdminAlertsPage() {
           return;
         }
 
-        const response = await fetchAlertsConfig();
-        const config = response.config;
+        const [configResponse, thresholdResponse] = await Promise.all([
+          fetchAlertsConfig(),
+          fetchSensorAlertThresholds(),
+        ]);
+
+        const config = configResponse.config;
 
         setForm({
           emailFrom: config.emailFrom || "",
           emailToText: (config.emailTo || []).join("|"),
-          tempMin: String(config.tempMin ?? ""),
-          tempMax: String(config.tempMax ?? ""),
-          humMin: String(config.humMin ?? ""),
-          humMax: String(config.humMax ?? ""),
-          voltMin: String(config.voltMin ?? ""),
+          cooldownMinutes: String(config.cooldownMinutes ?? "180"),
           enabled: Boolean(config.enabled),
         });
+
+        setSensorThresholds(thresholdResponse.thresholds || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "No se pudo cargar.");
       } finally {
@@ -70,6 +98,23 @@ export default function AdminAlertsPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  function onThresholdChange(sensorId, field, value) {
+    setSensorThresholds((prev) =>
+      prev.map((item) =>
+        item.sensorId === sensorId ? { ...item, [field]: value } : item
+      )
+    );
+  }
+
+  function onBulkChange(field, value) {
+    setBulkForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  const filteredThresholds = sensorThresholds.filter((item) => {
+    if (!sensorSearch) return true;
+    return item.sensorName.toLowerCase().includes(sensorSearch.toLowerCase());
+  });
+
   async function handleSave(event) {
     event.preventDefault();
 
@@ -81,11 +126,7 @@ export default function AdminAlertsPage() {
       await updateAlertsConfig({
         emailFrom: form.emailFrom,
         emailTo: form.emailToText,
-        tempMin: Number(form.tempMin),
-        tempMax: Number(form.tempMax),
-        humMin: Number(form.humMin),
-        humMax: Number(form.humMax),
-        voltMin: Number(form.voltMin),
+        cooldownMinutes: Number(form.cooldownMinutes),
         enabled: form.enabled,
       });
 
@@ -116,6 +157,101 @@ export default function AdminAlertsPage() {
     }
   }
 
+  async function handleSaveThresholds() {
+    try {
+      setSavingThresholds(true);
+      setError("");
+      setSuccess("");
+
+      const payload = {
+        thresholds: sensorThresholds.map((item) => ({
+          sensorId: item.sensorId,
+          tempMin: Number(item.tempMin),
+          tempMax: Number(item.tempMax),
+          humMin: Number(item.humMin),
+          humMax: Number(item.humMax),
+          voltMin: Number(item.voltMin),
+          enabled: Boolean(item.enabled),
+        })),
+      };
+
+      const response = await updateSensorAlertThresholds(payload);
+      setSensorThresholds(response.thresholds || []);
+      setSuccess("Umbrales por sensor guardados correctamente.");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "No se pudieron guardar umbrales."
+      );
+    } finally {
+      setSavingThresholds(false);
+    }
+  }
+
+  function handleApplyBulkToFiltered() {
+    const tempMin = Number(bulkForm.tempMin);
+    const tempMax = Number(bulkForm.tempMax);
+    const humMin = Number(bulkForm.humMin);
+    const humMax = Number(bulkForm.humMax);
+    const voltMin = Number(bulkForm.voltMin);
+
+    if (
+      !Number.isFinite(tempMin) ||
+      !Number.isFinite(tempMax) ||
+      !Number.isFinite(humMin) ||
+      !Number.isFinite(humMax) ||
+      !Number.isFinite(voltMin)
+    ) {
+      setError("Los valores base deben ser numericos.");
+      return;
+    }
+
+    if (tempMin >= tempMax) {
+      setError("TEMP_MIN debe ser menor que TEMP_MAX en valores base.");
+      return;
+    }
+
+    if (humMin >= humMax) {
+      setError("HUM_MIN debe ser menor que HUM_MAX en valores base.");
+      return;
+    }
+
+    const filteredIds = new Set(filteredThresholds.map((item) => item.sensorId));
+
+    if (filteredIds.size === 0) {
+      setError("No hay sensores filtrados para aplicar valores base.");
+      return;
+    }
+
+    setSensorThresholds((prev) =>
+      prev.map((item) => {
+        if (!filteredIds.has(item.sensorId)) {
+          return item;
+        }
+
+        return {
+          ...item,
+          tempMin,
+          tempMax,
+          humMin,
+          humMax,
+          voltMin,
+          enabled: bulkForm.enabled,
+        };
+      })
+    );
+
+    setError("");
+    setSuccess(
+      `Valores base aplicados a ${filteredIds.size} sensor(es) filtrados. Ahora pulsa "Guardar umbrales".`
+    );
+  }
+
+  function handleResetBulkForm() {
+    setBulkForm(createInitialBulkForm());
+    setError("");
+    setSuccess("Valores base restablecidos.");
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-6">
@@ -127,6 +263,20 @@ export default function AdminAlertsPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       <div className="mx-auto max-w-4xl space-y-6">
+        {(error || success) && (
+          <div className="fixed top-4 right-4 z-[100]">
+            <div
+              className={`rounded-md px-4 py-3 text-sm shadow-lg border ${
+                error
+                  ? "bg-red-900/90 border-red-700 text-red-100"
+                  : "bg-emerald-900/90 border-emerald-700 text-emerald-100"
+              }`}
+            >
+              {error || success}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Configuracion de notificaciones</h1>
           <div className="flex items-center gap-2">
@@ -144,6 +294,258 @@ export default function AdminAlertsPage() {
             >
               <Home size={20} />
             </button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Umbrales por sensor</h2>
+            <button
+              type="button"
+              onClick={handleSaveThresholds}
+              disabled={savingThresholds}
+              className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-800"
+            >
+              {savingThresholds ? "Guardando..." : "Guardar umbrales"}
+            </button>
+          </div>
+
+          <input
+            type="text"
+            value={sensorSearch}
+            onChange={(event) => setSensorSearch(event.target.value)}
+            className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
+            placeholder="Buscar sensor por nombre..."
+          />
+
+          <div className="rounded-lg border border-gray-700 bg-gray-900 p-3 space-y-3">
+            <p className="text-sm font-semibold">Aplicacion masiva (a sensores filtrados)</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.tempMin}
+                onChange={(event) => onBulkChange("tempMin", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="TEMP_MIN"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.tempMax}
+                onChange={(event) => onBulkChange("tempMax", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="TEMP_MAX"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.humMin}
+                onChange={(event) => onBulkChange("humMin", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="HUM_MIN"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.humMax}
+                onChange={(event) => onBulkChange("humMax", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="HUM_MAX"
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={bulkForm.voltMin}
+                onChange={(event) => onBulkChange("voltMin", event.target.value)}
+                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                placeholder="VOLT_MIN"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-xs text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={bulkForm.enabled}
+                  onChange={(event) => onBulkChange("enabled", event.target.checked)}
+                />
+                Marcar activos al aplicar
+              </label>
+              <button
+                type="button"
+                onClick={handleApplyBulkToFiltered}
+                className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold hover:bg-indigo-500"
+              >
+                Aplicar a filtrados
+              </button>
+              <button
+                type="button"
+                onClick={handleResetBulkForm}
+                className="rounded-md bg-slate-600 px-3 py-2 text-sm font-semibold hover:bg-slate-500"
+              >
+                Restablecer formulario base
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-3 md:hidden">
+            {filteredThresholds.map((item) => (
+              <div
+                key={item.sensorId}
+                className="rounded-lg border border-gray-700 bg-gray-900 p-3"
+              >
+                <p className="text-sm font-semibold">{item.sensorName}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.tempMin}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "tempMin", event.target.value)
+                    }
+                    className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                    placeholder="TEMP_MIN"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.tempMax}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "tempMax", event.target.value)
+                    }
+                    className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                    placeholder="TEMP_MAX"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.humMin}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "humMin", event.target.value)
+                    }
+                    className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                    placeholder="HUM_MIN"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.humMax}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "humMax", event.target.value)
+                    }
+                    className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                    placeholder="HUM_MAX"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.voltMin}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "voltMin", event.target.value)
+                    }
+                    className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2 col-span-2"
+                    placeholder="VOLT_MIN"
+                  />
+                </div>
+                <label className="mt-3 inline-flex items-center gap-2 text-xs text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={item.enabled}
+                    onChange={(event) =>
+                      onThresholdChange(item.sensorId, "enabled", event.target.checked)
+                    }
+                  />
+                  Alertas activas para este sensor
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-700 text-left text-gray-300">
+                  <th className="py-2 pr-2">Sensor</th>
+                  <th className="py-2 pr-2">TEMP_MIN</th>
+                  <th className="py-2 pr-2">TEMP_MAX</th>
+                  <th className="py-2 pr-2">HUM_MIN</th>
+                  <th className="py-2 pr-2">HUM_MAX</th>
+                  <th className="py-2 pr-2">VOLT_MIN</th>
+                  <th className="py-2 pr-2">Activo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredThresholds.map((item) => (
+                  <tr key={item.sensorId} className="border-b border-gray-800">
+                    <td className="py-2 pr-2">{item.sensorName}</td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.tempMin}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "tempMin", event.target.value)
+                        }
+                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.tempMax}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "tempMax", event.target.value)
+                        }
+                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.humMin}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "humMin", event.target.value)
+                        }
+                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.humMax}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "humMax", event.target.value)
+                        }
+                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.voltMin}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "voltMin", event.target.value)
+                        }
+                        className="w-28 rounded-md border border-gray-600 bg-gray-900 px-2 py-1"
+                      />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="checkbox"
+                        checked={item.enabled}
+                        onChange={(event) =>
+                          onThresholdChange(item.sensorId, "enabled", event.target.checked)
+                        }
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -178,56 +580,15 @@ export default function AdminAlertsPage() {
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <label className="mb-1 block text-sm text-gray-300">TEMP_MIN</label>
+              <label className="mb-1 block text-sm text-gray-300">
+                COOLDOWN (min)
+              </label>
               <input
                 type="number"
-                step="0.01"
-                value={form.tempMin}
-                onChange={(event) => onChange("tempMin", event.target.value)}
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
-                required
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-gray-300">TEMP_MAX</label>
-              <input
-                type="number"
-                step="0.01"
-                value={form.tempMax}
-                onChange={(event) => onChange("tempMax", event.target.value)}
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
-                required
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-gray-300">HUM_MIN</label>
-              <input
-                type="number"
-                step="0.01"
-                value={form.humMin}
-                onChange={(event) => onChange("humMin", event.target.value)}
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
-                required
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-gray-300">HUM_MAX</label>
-              <input
-                type="number"
-                step="0.01"
-                value={form.humMax}
-                onChange={(event) => onChange("humMax", event.target.value)}
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
-                required
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-gray-300">VOLT_MIN</label>
-              <input
-                type="number"
-                step="0.01"
-                value={form.voltMin}
-                onChange={(event) => onChange("voltMin", event.target.value)}
+                min="0"
+                step="1"
+                value={form.cooldownMinutes}
+                onChange={(event) => onChange("cooldownMinutes", event.target.value)}
                 className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2"
                 required
               />
@@ -266,6 +627,8 @@ export default function AdminAlertsPage() {
           <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 text-sm">
             <p>Sensores revisados: {runResult.checkedSensors}</p>
             <p>Alertas enviadas: {runResult.sentAlerts}</p>
+            <p>Alertas omitidas por cooldown: {runResult.skippedByCooldown || 0}</p>
+            <p>Cooldown aplicado: {runResult.cooldownMinutes || 0} min</p>
             {Array.isArray(runResult.errors) && runResult.errors.length > 0 && (
               <div className="mt-2">
                 <p className="font-semibold text-red-300">Errores:</p>
@@ -279,8 +642,6 @@ export default function AdminAlertsPage() {
           </div>
         )}
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
-        {success && <p className="text-sm text-green-400">{success}</p>}
       </div>
     </div>
   );

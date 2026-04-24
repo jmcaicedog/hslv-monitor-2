@@ -125,6 +125,36 @@ export async function runAlertsCheckNow() {
   return data;
 }
 
+export async function fetchSensorAlertThresholds() {
+  const response = await fetch("/api/admin/alerts-thresholds", {
+    cache: "no-store",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo cargar umbrales por sensor");
+  }
+
+  return data;
+}
+
+export async function updateSensorAlertThresholds(payload) {
+  const response = await fetch("/api/admin/alerts-thresholds", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo guardar umbrales por sensor");
+  }
+
+  return data;
+}
+
 export async function fetchSensorReadings(sensorId, options = {}) {
   const params = new URLSearchParams();
 

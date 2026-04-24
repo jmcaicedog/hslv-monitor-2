@@ -1,5 +1,5 @@
 import { query } from "./db.js";
-import { getAlertConfig } from "./alert-config-db.js";
+import { getAlertConfig, getSensorAlertThresholds } from "./alert-config-db.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -8,6 +8,64 @@ function sleep(ms) {
 function asNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function ensureAlertRuntimeSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS alert_notification_state (
+      sensor_id BIGINT NOT NULL,
+      metric_key TEXT NOT NULL,
+      last_sent_at TIMESTAMPTZ NOT NULL,
+      last_value DOUBLE PRECISION,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (sensor_id, metric_key)
+    );
+  `);
+}
+
+async function getAlertStateMap() {
+  const { rows } = await query(`
+    SELECT sensor_id, metric_key, last_sent_at
+    FROM alert_notification_state;
+  `);
+
+  const map = new Map();
+
+  for (const row of rows) {
+    const key = `${row.sensor_id}:${row.metric_key}`;
+    map.set(key, row.last_sent_at ? new Date(row.last_sent_at) : null);
+  }
+
+  return map;
+}
+
+function canSendByCooldown(lastSentAt, cooldownMinutes) {
+  if (!lastSentAt) return true;
+  if (cooldownMinutes <= 0) return true;
+
+  const elapsedMs = Date.now() - lastSentAt.getTime();
+  return elapsedMs >= cooldownMinutes * 60 * 1000;
+}
+
+async function saveAlertState(sensorId, metricKey, value) {
+  await query(
+    `
+      INSERT INTO alert_notification_state (
+        sensor_id,
+        metric_key,
+        last_sent_at,
+        last_value,
+        updated_at
+      )
+      VALUES ($1, $2, NOW(), $3, NOW())
+      ON CONFLICT (sensor_id, metric_key)
+      DO UPDATE SET
+        last_sent_at = NOW(),
+        last_value = EXCLUDED.last_value,
+        updated_at = NOW();
+    `,
+    [sensorId, metricKey, value]
+  );
 }
 
 async function getLatestSensorValues() {
@@ -93,6 +151,8 @@ async function sendEmailAlert(config, sensorName, subject, message) {
 }
 
 export async function runThresholdAlerts() {
+  await ensureAlertRuntimeSchema();
+
   const config = await getAlertConfig();
 
   if (!config.emailFrom || !Array.isArray(config.emailTo) || config.emailTo.length === 0) {
@@ -112,48 +172,96 @@ export async function runThresholdAlerts() {
   }
 
   const sensorDataList = await getLatestSensorValues();
+  const sensorThresholds = await getSensorAlertThresholds();
+  const alertStateMap = await getAlertStateMap();
+  const thresholdMap = new Map(
+    sensorThresholds.map((item) => [item.sensorId, item])
+  );
 
   let sentAlerts = 0;
+  let skippedByCooldown = 0;
   const errors = [];
 
+  const cooldownMinutes = Number.isFinite(Number(config.cooldownMinutes))
+    ? Math.max(0, Math.floor(Number(config.cooldownMinutes)))
+    : 180;
+
   for (const sensor of sensorDataList) {
-    const { sensorName, temperature, humidity, voltage } = sensor;
+    const { sensorId, sensorName, temperature, humidity, voltage } = sensor;
+    const sensorThreshold = thresholdMap.get(sensorId);
+
+    if (!sensorThreshold || sensorThreshold.enabled === false) {
+      continue;
+    }
 
     try {
       if (
         temperature !== null &&
-        (temperature < config.tempMin || temperature > config.tempMax)
+        (temperature < sensorThreshold.tempMin || temperature > sensorThreshold.tempMax)
       ) {
+        const metricKey = "temperature";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
         const message = `
           El sensor <strong>${sensorName}</strong> ha registrado una temperatura de
           <strong>${temperature}°C</strong>, fuera del rango permitido de
-          ${config.tempMin}°C a ${config.tempMax}°C.`;
+          ${sensorThreshold.tempMin}°C a ${sensorThreshold.tempMax}°C.`;
 
         await sendEmailAlert(config, sensorName, "Temperatura Fuera de Rango", message);
+        await saveAlertState(sensorId, metricKey, temperature);
+        alertStateMap.set(stateKey, new Date());
         sentAlerts += 1;
         await sleep(500);
+        }
       }
 
-      if (humidity !== null && (humidity < config.humMin || humidity > config.humMax)) {
+      if (
+        humidity !== null &&
+        (humidity < sensorThreshold.humMin || humidity > sensorThreshold.humMax)
+      ) {
+        const metricKey = "humidity";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
         const message = `
           El sensor <strong>${sensorName}</strong> ha registrado una humedad de
           <strong>${humidity}%</strong>, fuera del rango permitido de
-          ${config.humMin}% a ${config.humMax}%.`;
+          ${sensorThreshold.humMin}% a ${sensorThreshold.humMax}%.`;
 
         await sendEmailAlert(config, sensorName, "Humedad Fuera de Rango", message);
+        await saveAlertState(sensorId, metricKey, humidity);
+        alertStateMap.set(stateKey, new Date());
         sentAlerts += 1;
         await sleep(500);
+        }
       }
 
-      if (voltage !== null && voltage < config.voltMin) {
+      if (voltage !== null && voltage < sensorThreshold.voltMin) {
+        const metricKey = "voltage";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
         const message = `
           El sensor <strong>${sensorName}</strong> ha registrado un voltaje de
           <strong>${voltage}V</strong>.
           <br><strong>DEBE CARGARSE LO MAS PRONTO POSIBLE.</strong>`;
 
         await sendEmailAlert(config, sensorName, "Voltaje Bajo", message);
+        await saveAlertState(sensorId, metricKey, voltage);
+        alertStateMap.set(stateKey, new Date());
         sentAlerts += 1;
         await sleep(500);
+        }
       }
     } catch (error) {
       errors.push(
@@ -167,6 +275,8 @@ export async function runThresholdAlerts() {
     enabled: true,
     checkedSensors: sensorDataList.length,
     sentAlerts,
+    skippedByCooldown,
+    cooldownMinutes,
     errors,
   };
 }
