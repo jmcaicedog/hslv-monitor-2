@@ -39,6 +39,15 @@ export async function ensureAlertRuntimeSchema() {
 
 function createTriggerPayload(metricKey, value, threshold) {
   switch (metricKey) {
+    case "inactive":
+      return {
+        metricKey,
+        metricLabel: "Estado",
+        value: "Inactivo",
+        unit: "",
+        min: null,
+        max: null,
+      };
     case "temperature":
       return {
         metricKey,
@@ -316,6 +325,7 @@ async function getLatestSensorValues() {
   const { rows } = await query(`
     SELECT
       s.id,
+      s.status,
       COALESCE(NULLIF(s.title, ''), 'Sensor ' || s.id::text) AS sensor_name,
       t.temperatura,
       h.humedad,
@@ -363,6 +373,7 @@ async function getLatestSensorValues() {
 
   return rows.map((row) => ({
     sensorId: Number(row.id),
+    status: row.status,
     sensorName: row.sensor_name,
     temperature: asNumber(row.temperatura),
     humidity: asNumber(row.humedad),
@@ -449,17 +460,40 @@ export async function runThresholdAlerts() {
     : 180;
 
   for (const sensor of sensorDataList) {
-    const { sensorId, sensorName, temperature, humidity, voltage, pressure, light } = sensor;
+    const { sensorId, sensorName, status, temperature, humidity, voltage, pressure, light } = sensor;
     const sensorThreshold = thresholdMap.get(sensorId);
-
-    if (!sensorThreshold || sensorThreshold.enabled === false) {
-      await upsertSensorAlarmState(sensorId, []);
-      continue;
-    }
+    const canCheckThresholds = Boolean(sensorThreshold) && sensorThreshold.enabled !== false;
 
     const triggeredMetrics = [];
 
     try {
+      if (Number(status) === 0) {
+        triggeredMetrics.push(createTriggerPayload("inactive", 0));
+
+        const metricKey = "inactive";
+        const stateKey = `${sensorId}:${metricKey}`;
+        const lastSentAt = alertStateMap.get(stateKey);
+
+        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
+          skippedByCooldown += 1;
+        } else {
+          const message = `
+          El sensor <strong>${sensorName}</strong> se encuentra en estado
+          <strong>inactivo</strong> y no esta reportando actividad normal.`;
+
+          await sendEmailAlert(config, sensorName, "Sensor Inactivo", message);
+          await saveAlertState(sensorId, metricKey, 0);
+          alertStateMap.set(stateKey, new Date());
+          sentAlerts += 1;
+          await sleep(500);
+        }
+      }
+
+      if (!canCheckThresholds) {
+        await upsertSensorAlarmState(sensorId, triggeredMetrics);
+        continue;
+      }
+
       if (
         temperature !== null &&
         (temperature < sensorThreshold.tempMin || temperature > sensorThreshold.tempMax)
