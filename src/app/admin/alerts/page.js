@@ -360,78 +360,96 @@ export default function AdminAlertsPage() {
           <div className="rounded-lg border border-gray-700 bg-gray-900 p-3 space-y-3">
             <p className="text-sm font-semibold">Aplicacion masiva (a sensores filtrados)</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.tempMin}
-                onChange={(event) => onBulkChange("tempMin", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="TEMP_MIN"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.tempMax}
-                onChange={(event) => onBulkChange("tempMax", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="TEMP_MAX"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.humMin}
-                onChange={(event) => onBulkChange("humMin", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="HUM_MIN"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.humMax}
-                onChange={(event) => onBulkChange("humMax", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="HUM_MAX"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.voltMin}
-                onChange={(event) => onBulkChange("voltMin", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="VOLT_MIN"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.pressureMin}
-                onChange={(event) => onBulkChange("pressureMin", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="PRESSURE_MIN"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.pressureMax}
-                onChange={(event) => onBulkChange("pressureMax", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="PRESSURE_MAX"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.lightMin}
-                onChange={(event) => onBulkChange("lightMin", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="LIGHT_MIN"
-              />
-              <input
-                type="number"
-                step="0.01"
-                value={bulkForm.lightMax}
-                onChange={(event) => onBulkChange("lightMax", event.target.value)}
-                className="rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
-                placeholder="LIGHT_MAX"
-              />
+              <label className="text-xs text-gray-300">
+                TEMP_MIN
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.tempMin}
+                  onChange={(event) => onBulkChange("tempMin", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                TEMP_MAX
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.tempMax}
+                  onChange={(event) => onBulkChange("tempMax", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                HUM_MIN
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.humMin}
+                  onChange={(event) => onBulkChange("humMin", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                HUM_MAX
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.humMax}
+                  onChange={(event) => onBulkChange("humMax", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                VOLT_MIN
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.voltMin}
+                  onChange={(event) => onBulkChange("voltMin", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                PRESSURE_MIN
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.pressureMin}
+                  onChange={(event) => onBulkChange("pressureMin", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                PRESSURE_MAX
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.pressureMax}
+                  onChange={(event) => onBulkChange("pressureMax", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                LIGHT_MIN
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.lightMin}
+                  onChange={(event) => onBulkChange("lightMin", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
+              <label className="text-xs text-gray-300">
+                LIGHT_MAX
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkForm.lightMax}
+                  onChange={(event) => onBulkChange("lightMax", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-600 bg-gray-900 px-2 py-2"
+                />
+              </label>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex items-center gap-2 text-xs text-gray-300">
