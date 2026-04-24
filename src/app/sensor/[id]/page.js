@@ -2,7 +2,7 @@
 import { attendSensorAlarm, fetchSensorAlarmState, fetchSensorReadings } from "@/utils/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { FaTimes, FaDownload } from "react-icons/fa";
+import { FaTimes, FaDownload, FaFileCsv } from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { useParams } from "next/navigation";
@@ -35,6 +35,14 @@ const unitMap = {
   presion: "KPa",
   luz: "lx",
 };
+
+function escapeCsvCell(value) {
+  const text = String(value ?? "");
+  if (/[";\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
 
 function compressCanvasForPdf(canvas, options = {}) {
   const maxWidth = Number(options.maxWidth) || 1400;
@@ -538,6 +546,56 @@ const SensorDetail = () => {
     console.info(`PDF generado: ${sizeMb} MB`);
   }
 
+  function handleDownloadCSV() {
+    const generatedAt = new Date().toLocaleString("es-ES");
+    const sensorTitle = sensorName || String(id || "Sensor");
+
+    const lines = [];
+    lines.push(`Sensor;${escapeCsvCell(sensorTitle)}`);
+    lines.push(`Rango;${escapeCsvCell(reportRangeLabel)}`);
+    lines.push(`Generado;${escapeCsvCell(generatedAt)}`);
+    lines.push("");
+
+    Object.keys(dailyMinMax).forEach((key) => {
+      const unit = unitMap[key] || "";
+      const dates = Object.keys(dailyMinMax[key] || {})
+        .sort((a, b) => a.localeCompare(b))
+        .slice(-30);
+
+      if (dates.length === 0) {
+        return;
+      }
+
+      const metricName = `${key.charAt(0).toUpperCase() + key.slice(1)}${unit ? ` (${unit})` : ""}`;
+      lines.push(`Variable;${escapeCsvCell(metricName)}`);
+      lines.push("Fecha;Minimo;Maximo");
+
+      dates.forEach((date) => {
+        const row = dailyMinMax[key][date];
+        const min = Number(row?.min);
+        const max = Number(row?.max);
+        lines.push(
+          [
+            escapeCsvCell(date),
+            escapeCsvCell(Number.isFinite(min) ? min.toFixed(2) : ""),
+            escapeCsvCell(Number.isFinite(max) ? max.toFixed(2) : ""),
+          ].join(";")
+        );
+      });
+
+      lines.push("");
+    });
+
+    const csvContent = `\uFEFF${lines.join("\n")}`;
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `sensor_${id}_tablas.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-4">
@@ -553,9 +611,18 @@ const SensorDetail = () => {
           <button
             className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600"
             onClick={handleDownloadPDF}
+            title="Exportar reporte PDF"
           >
             {" "}
             <FaDownload size={20} />{" "}
+          </button>
+          <button
+            className="p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-500"
+            onClick={handleDownloadCSV}
+            title="Exportar tablas en CSV"
+          >
+            {" "}
+            <FaFileCsv size={20} />{" "}
           </button>
         </div>
       </div>
