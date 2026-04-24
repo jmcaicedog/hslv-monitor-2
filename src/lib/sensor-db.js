@@ -1,4 +1,5 @@
 import { query } from "./db.js";
+import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
 
@@ -67,6 +68,8 @@ export async function ensureSensorSchema() {
 }
 
 export async function getSensorsOverview() {
+  await ensureAlertRuntimeSchema();
+
   const { rows } = await query(
     `
       SELECT
@@ -74,6 +77,9 @@ export async function getSensorsOverview() {
         s.title,
         s.description,
         s.status,
+        COALESCE(sas.active_alarm, FALSE) AS active_alarm,
+        COALESCE(sas.silenced, FALSE) AS alarm_silenced,
+        COALESCE(sas.active_metrics, '[]'::jsonb) AS active_metrics,
         r.last_observed_at AS observed_at,
         r.temperatura,
         r.humedad,
@@ -81,6 +87,7 @@ export async function getSensorsOverview() {
         r.presion,
         r.luz
       FROM sensors s
+      LEFT JOIN sensor_alarm_state sas ON sas.sensor_id = s.id
       LEFT JOIN LATERAL (
         SELECT
           MAX(observed_at) AS last_observed_at,
@@ -106,6 +113,10 @@ export async function getSensorsOverview() {
     title: row.title,
     description: row.description,
     status: row.status,
+    activeAlarm: Boolean(row.active_alarm),
+    alarmSilenced: Boolean(row.alarm_silenced),
+    hasActiveAlarm: Boolean(row.active_alarm) && !Boolean(row.alarm_silenced),
+    activeAlarmMetrics: Array.isArray(row.active_metrics) ? row.active_metrics : [],
     createdAt: row.observed_at,
     temperature: row.temperatura,
     humidity: row.humedad,

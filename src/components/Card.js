@@ -19,6 +19,7 @@ export default function Card({
   light,
   createdAt,
   status,
+  hasActiveAlarm,
 }) {
   const formattedDate = useMemo(() => {
     const parsed = new Date(createdAt);
@@ -65,7 +66,18 @@ export default function Card({
   }, [humidity, light, pressure, temperature, voltage]);
 
   return (
-    <div className="bg-white shadow-md p-4 rounded-lg flex flex-col items-center w-full max-w-md mx-auto cursor-pointer hover:bg-gray-100 transition">
+    <div
+      className={`relative shadow-md p-4 rounded-lg flex flex-col items-center w-full max-w-md mx-auto cursor-pointer transition ${
+        hasActiveAlarm
+          ? "bg-red-100 border border-red-300 hover:bg-red-200"
+          : "bg-white hover:bg-gray-100"
+      }`}
+    >
+      {hasActiveAlarm ? (
+        <span className="absolute right-3 top-3 rounded-full bg-red-600 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-white">
+          Alarma
+        </span>
+      ) : null}
       <Link href={`/sensor/${id}`} className="w-full">
         <p className="text-sm font-semibold mb-3 text-center">{title}</p>
         <div className="flex flex-wrap justify-center w-full gap-2 sm:gap-4">
@@ -80,7 +92,11 @@ export default function Card({
             <p className="text-sm text-gray-500">Sin variables con datos</p>
           )}
         </div>
-        <div className="flex justify-center items-center text-xs text-center text-gray-500 mt-2">
+        <div
+          className={`flex justify-center items-center text-xs text-center mt-2 ${
+            hasActiveAlarm ? "text-red-700" : "text-gray-500"
+          }`}
+        >
           <strong>ACTUALIZACIÓN: </strong> {formattedDate}{" "}
           <strong> ESTADO:</strong>{" "}
           <FaCircle

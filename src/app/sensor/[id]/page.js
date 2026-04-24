@@ -1,5 +1,5 @@
 "use client";
-import { fetchSensorReadings } from "@/utils/api";
+import { attendSensorAlarm, fetchSensorAlarmState, fetchSensorReadings } from "@/utils/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { FaTimes, FaDownload } from "react-icons/fa";
@@ -46,6 +46,9 @@ const SensorDetail = () => {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [alarmState, setAlarmState] = useState(null);
+  const [attendingAlarm, setAttendingAlarm] = useState(false);
+  const [alarmFeedback, setAlarmFeedback] = useState("");
 
   const getLast12Months = () => {
     const now = new Date();
@@ -72,12 +75,16 @@ const SensorDetail = () => {
       setError("");
 
       try {
-        const payload = await fetchSensorReadings(id, {
-          month: selectedMonth,
-          hours: selectedMonth ? undefined : timeRange,
-        });
+        const [payload, alarmPayload] = await Promise.all([
+          fetchSensorReadings(id, {
+            month: selectedMonth,
+            hours: selectedMonth ? undefined : timeRange,
+          }),
+          fetchSensorAlarmState(id).catch(() => ({ alarm: null })),
+        ]);
 
         setSensorName(payload.sensorName || id);
+        setAlarmState(alarmPayload?.alarm || null);
 
         const normalized = (payload.data || [])
           .map((entry) => ({
@@ -98,6 +105,24 @@ const SensorDetail = () => {
 
     fetchData();
   }, [id, timeRange, selectedMonth]);
+
+  async function handleAttendAlarm() {
+    if (!id) return;
+
+    try {
+      setAttendingAlarm(true);
+      setAlarmFeedback("");
+      const response = await attendSensorAlarm(id);
+      setAlarmState(response.alarm || null);
+      setAlarmFeedback("Alarma atendida y notificacion enviada correctamente.");
+    } catch (err) {
+      setAlarmFeedback(
+        err instanceof Error ? err.message : "No se pudo atender la alarma."
+      );
+    } finally {
+      setAttendingAlarm(false);
+    }
+  }
 
   const dailyMinMax = useMemo(() => {
     const dailyValues = {};
@@ -184,6 +209,34 @@ const SensorDetail = () => {
           </button>
         </div>
       </div>
+
+      {alarmState?.hasActiveAlarm ? (
+        <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-4 text-red-800">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide">Alarma activa</p>
+              <p className="text-sm">
+                Este sensor esta en estado de alarma. Puedes marcarla como atendida.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAttendAlarm}
+              disabled={attendingAlarm}
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-300"
+            >
+              {attendingAlarm ? "Atendiendo..." : "Desactivar alarma"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {alarmFeedback ? (
+        <div className="mb-4 rounded-md border border-gray-300 bg-white p-3 text-sm text-gray-700">
+          {alarmFeedback}
+        </div>
+      ) : null}
+
       <div className="flex justify-between items-center mb-4 flex-wrap gap-4">
         <div>
           <label className="mr-2">Selecciona el periodo:</label>

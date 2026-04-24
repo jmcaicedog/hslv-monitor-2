@@ -175,3 +175,31 @@ export async function fetchSensorReadings(sensorId, options = {}) {
 
   return response.json();
 }
+
+export async function fetchSensorAlarmState(sensorId) {
+  const response = await fetch(`/api/sensors/${sensorId}/alarm`, {
+    cache: "no-store",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo consultar el estado de alarma");
+  }
+
+  return data;
+}
+
+export async function attendSensorAlarm(sensorId) {
+  const response = await fetch(`/api/sensors/${sensorId}/alarm`, {
+    method: "POST",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo atender la alarma");
+  }
+
+  return data;
+}

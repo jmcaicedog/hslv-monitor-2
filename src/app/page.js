@@ -54,6 +54,7 @@ export default function Home() {
           voltage: normalizeMetric(sensor.voltage),
           pressure: normalizeMetric(sensor.pressure),
           light: normalizeMetric(sensor.light),
+          hasActiveAlarm: Boolean(sensor.hasActiveAlarm),
         }));
         setSensors(formattedData);
       } catch (error) {
