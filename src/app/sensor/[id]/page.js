@@ -36,6 +36,276 @@ const unitMap = {
   luz: "lx",
 };
 
+function compressCanvasForPdf(canvas, options = {}) {
+  const maxWidth = Number(options.maxWidth) || 1400;
+  const maxArea = Number(options.maxArea) || 900000;
+  const quality = Number(options.quality) || 0.75;
+  const widthRatio = Math.min(1, maxWidth / canvas.width);
+  const areaRatio = Math.min(1, Math.sqrt(maxArea / (canvas.width * canvas.height)));
+  const ratio = Math.min(widthRatio, areaRatio);
+
+  const resized = document.createElement("canvas");
+  resized.width = Math.max(1, Math.round(canvas.width * ratio));
+  resized.height = Math.max(1, Math.round(canvas.height * ratio));
+
+  const context = resized.getContext("2d");
+  if (!context) {
+    return {
+      dataUrl: canvas.toDataURL("image/jpeg", quality),
+      width: canvas.width,
+      height: canvas.height,
+    };
+  }
+
+  // Aplana transparencia sobre blanco antes de comprimir a JPEG.
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, resized.width, resized.height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, resized.width, resized.height);
+
+  return {
+    dataUrl: resized.toDataURL("image/jpeg", quality),
+    width: resized.width,
+    height: resized.height,
+  };
+}
+
+async function renderElementCanvas(element, scale = 1) {
+  return html2canvas(element, {
+    scale,
+    backgroundColor: "#ffffff",
+    useCORS: true,
+    onclone: (clonedDoc) => {
+      clonedDoc.body.style.background = "#ffffff";
+      clonedDoc.documentElement.style.background = "#ffffff";
+
+      clonedDoc
+        .querySelectorAll(".sensor-chart, .data-table")
+        .forEach((node) => {
+          node.style.background = "#ffffff";
+          node.style.boxShadow = "none";
+          node.style.filter = "none";
+          node.style.opacity = "1";
+
+          node.querySelectorAll("*").forEach((child) => {
+            child.style.boxShadow = "none";
+            child.style.filter = "none";
+            child.style.textShadow = "none";
+          });
+        });
+    },
+  });
+}
+
+function addCanvasPaginated(doc, canvas, options = {}) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginLeft = options.marginLeft ?? 10;
+  const marginRight = options.marginRight ?? 10;
+  const marginBottom = options.marginBottom ?? 10;
+  const topMargin = options.topMargin ?? 10;
+  const onNewPage = typeof options.onNewPage === "function" ? options.onNewPage : null;
+  const contentWidth = pageWidth - marginLeft - marginRight;
+
+  let yOffset = options.startY ?? 10;
+  let startPx = 0;
+
+  while (startPx < canvas.height) {
+    const availableHeightMm = pageHeight - yOffset - marginBottom;
+
+    if (availableHeightMm <= 0) {
+      doc.addPage();
+      if (onNewPage) {
+        onNewPage(doc);
+      }
+      yOffset = topMargin;
+      continue;
+    }
+
+    const mmPerPx = contentWidth / canvas.width;
+    const sliceHeightPx = Math.max(1, Math.floor(availableHeightMm / mmPerPx));
+    const remainingPx = canvas.height - startPx;
+    const currentSliceHeightPx = Math.min(remainingPx, sliceHeightPx);
+
+    const sliceCanvas = document.createElement("canvas");
+    sliceCanvas.width = canvas.width;
+    sliceCanvas.height = currentSliceHeightPx;
+
+    const ctx = sliceCanvas.getContext("2d");
+    if (!ctx) {
+      break;
+    }
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+    ctx.drawImage(
+      canvas,
+      0,
+      startPx,
+      canvas.width,
+      currentSliceHeightPx,
+      0,
+      0,
+      sliceCanvas.width,
+      sliceCanvas.height
+    );
+
+    const compressed = compressCanvasForPdf(sliceCanvas, {
+      maxWidth: 1100,
+      maxArea: 850000,
+      quality: 0.72,
+    });
+
+    const renderHeightMm = (compressed.height * contentWidth) / compressed.width;
+
+    doc.addImage(
+      compressed.dataUrl,
+      "JPEG",
+      marginLeft,
+      yOffset,
+      contentWidth,
+      renderHeightMm,
+      undefined,
+      "FAST"
+    );
+
+    startPx += currentSliceHeightPx;
+
+    if (startPx < canvas.height) {
+      doc.addPage();
+      if (onNewPage) {
+        onNewPage(doc);
+      }
+      yOffset = topMargin;
+    } else {
+      yOffset += renderHeightMm + (options.elementGap ?? 6);
+    }
+  }
+
+  return yOffset;
+}
+
+function addCanvasAsBlock(doc, canvas, options = {}) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginLeft = options.marginLeft ?? 10;
+  const marginRight = options.marginRight ?? 10;
+  const marginBottom = options.marginBottom ?? 10;
+  const topMargin = options.topMargin ?? 10;
+  const onNewPage = typeof options.onNewPage === "function" ? options.onNewPage : null;
+  const elementGap = options.elementGap ?? 8;
+  const contentWidth = pageWidth - marginLeft - marginRight;
+
+  let yOffset = options.startY ?? 10;
+
+  const compressed = compressCanvasForPdf(canvas, {
+    maxWidth: 1100,
+    maxArea: 850000,
+    quality: 0.72,
+  });
+
+  const renderHeightMm = (compressed.height * contentWidth) / compressed.width;
+  const maxRenderableBottom = pageHeight - marginBottom;
+
+  if (yOffset + renderHeightMm > maxRenderableBottom) {
+    doc.addPage();
+    if (onNewPage) {
+      onNewPage(doc);
+    }
+    yOffset = topMargin;
+  }
+
+  if (yOffset + renderHeightMm > maxRenderableBottom) {
+    return addCanvasPaginated(doc, canvas, {
+      ...options,
+      startY: yOffset,
+    });
+  }
+
+  doc.addImage(
+    compressed.dataUrl,
+    "JPEG",
+    marginLeft,
+    yOffset,
+    contentWidth,
+    renderHeightMm,
+    undefined,
+    "FAST"
+  );
+
+  return yOffset + renderHeightMm + elementGap;
+}
+
+async function renderTableChunksAsCanvases(container, options = {}) {
+  const rowsPerChunk = Math.max(1, Number(options.rowsPerChunk) || 12);
+  const scale = Number(options.scale) || 1;
+  const title = container.querySelector("h2");
+  const table = container.querySelector("table");
+
+  if (!table) {
+    return [await renderElementCanvas(container, scale)];
+  }
+
+  const thead = table.querySelector("thead");
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+
+  if (rows.length === 0) {
+    return [await renderElementCanvas(container, scale)];
+  }
+
+  const widthPx = Math.ceil(container.getBoundingClientRect().width);
+  const canvases = [];
+
+  for (let start = 0; start < rows.length; start += rowsPerChunk) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "bg-white rounded-lg border border-gray-300 p-4";
+    wrapper.style.width = `${widthPx}px`;
+    wrapper.style.boxSizing = "border-box";
+    wrapper.style.background = "#ffffff";
+
+    if (title) {
+      wrapper.appendChild(title.cloneNode(true));
+    }
+
+    const tableClone = document.createElement("table");
+    tableClone.className = table.className;
+    tableClone.style.width = "100%";
+    tableClone.style.borderCollapse = "collapse";
+
+    if (thead) {
+      tableClone.appendChild(thead.cloneNode(true));
+    }
+
+    const tbody = document.createElement("tbody");
+    rows.slice(start, start + rowsPerChunk).forEach((row) => {
+      tbody.appendChild(row.cloneNode(true));
+    });
+    tableClone.appendChild(tbody);
+
+    wrapper.appendChild(tableClone);
+
+    const host = document.createElement("div");
+    host.style.position = "fixed";
+    host.style.left = "-20000px";
+    host.style.top = "0";
+    host.style.zIndex = "-1";
+    host.style.background = "#ffffff";
+    host.appendChild(wrapper);
+
+    document.body.appendChild(host);
+
+    try {
+      const canvas = await renderElementCanvas(wrapper, scale);
+      canvases.push(canvas);
+    } finally {
+      document.body.removeChild(host);
+    }
+  }
+
+  return canvases;
+}
+
 const SensorDetail = () => {
   const router = useRouter();
   const params = useParams();
@@ -162,30 +432,110 @@ const SensorDetail = () => {
     }, {});
   }, [dailyMinMax, filteredData]);
 
+  const reportRangeLabel = useMemo(() => {
+    if (selectedMonth) {
+      const [yearStr, monthStr] = String(selectedMonth).split("-");
+      const year = Number(yearStr);
+      const month = Number(monthStr);
+
+      if (Number.isFinite(year) && Number.isFinite(month)) {
+        const date = new Date(year, month - 1, 1);
+        return `Mes: ${date.toLocaleDateString("es-ES", {
+          month: "long",
+          year: "numeric",
+        })}`;
+      }
+
+      return `Mes: ${selectedMonth}`;
+    }
+
+    const rangeMap = {
+      24: "Ultimas 24 horas",
+      72: "Ultimos 3 dias",
+      168: "Ultima semana",
+      720: "Ultimo mes",
+    };
+
+    return `Periodo: ${rangeMap[timeRange] || `Ultimas ${timeRange} horas`}`;
+  }, [selectedMonth, timeRange]);
+
   async function handleDownloadPDF() {
     const doc = new jsPDF({
       orientation: "portrait",
       unit: "mm",
       format: "a4",
+      compress: true,
     });
+
+    const generatedAt = new Date().toLocaleString("es-ES");
+    const sensorTitle = sensorName || String(id || "Sensor");
+
+    const drawReportHeader = (instance) => {
+      instance.setTextColor(20, 20, 20);
+      instance.setFont("helvetica", "bold");
+      instance.setFontSize(16);
+      instance.text(sensorTitle, 10, 14);
+
+      instance.setFont("helvetica", "normal");
+      instance.setFontSize(10);
+      instance.text(reportRangeLabel, 10, 20);
+      instance.text(`Generado: ${generatedAt}`, 10, 25);
+
+      instance.setDrawColor(200, 200, 200);
+      instance.line(10, 28, 200, 28);
+    };
+
+    drawReportHeader(doc);
+
     const elements = document.querySelectorAll(".sensor-chart, .data-table");
-    let yOffset = 10;
+    let yOffset = 32;
+
+    const captureScale = 1;
 
     for (let element of elements) {
-      const canvas = await html2canvas(element, { scale: 2 });
-      const imgData = canvas.toDataURL("image/png");
-      const imgHeight = (canvas.height * 190) / canvas.width;
+      if (element.classList.contains("data-table")) {
+        const chunks = await renderTableChunksAsCanvases(element, {
+          rowsPerChunk: 12,
+          scale: captureScale,
+        });
 
-      if (yOffset + imgHeight > 260) {
-        doc.addPage();
-        yOffset = 10;
+        for (const chunkCanvas of chunks) {
+          yOffset = addCanvasAsBlock(doc, chunkCanvas, {
+            startY: yOffset,
+            topMargin: 32,
+            marginLeft: 10,
+            marginRight: 10,
+            marginBottom: 10,
+            elementGap: 8,
+            onNewPage: drawReportHeader,
+          });
+        }
+
+        continue;
       }
 
-      doc.addImage(imgData, "PNG", 10, yOffset, 190, imgHeight);
-      yOffset += imgHeight + 10;
+      const canvas = await renderElementCanvas(element, captureScale);
+      yOffset = addCanvasAsBlock(doc, canvas, {
+        startY: yOffset,
+        topMargin: 32,
+        marginLeft: 10,
+        marginRight: 10,
+        marginBottom: 10,
+        elementGap: 8,
+        onNewPage: drawReportHeader,
+      });
     }
 
-    doc.save(`sensor_${id}.pdf`);
+    const pdfBlob = doc.output("blob");
+    const pdfUrl = URL.createObjectURL(pdfBlob);
+    const link = document.createElement("a");
+    link.href = pdfUrl;
+    link.download = `sensor_${id}.pdf`;
+    link.click();
+    URL.revokeObjectURL(pdfUrl);
+
+    const sizeMb = (pdfBlob.size / (1024 * 1024)).toFixed(2);
+    console.info(`PDF generado: ${sizeMb} MB`);
   }
 
   return (
