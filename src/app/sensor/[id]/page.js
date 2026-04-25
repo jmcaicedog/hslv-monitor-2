@@ -637,6 +637,28 @@ const SensorDetail = () => {
     return `Periodo: ${rangeMap[timeRange] || `Ultimas ${timeRange} horas`}`;
   }, [selectedMonth, timeRange, appliedStartDate, appliedEndDate]);
 
+  const activeAlarmLabels = useMemo(() => {
+    if (!alarmState?.hasActiveAlarm || !Array.isArray(alarmState?.activeMetrics)) {
+      return [];
+    }
+
+    const labels = alarmState.activeMetrics
+      .map((metric) => {
+        if (typeof metric?.metricLabel === "string" && metric.metricLabel.trim()) {
+          return metric.metricLabel.trim();
+        }
+
+        if (typeof metric?.metricKey === "string" && metric.metricKey.trim()) {
+          return metric.metricKey.trim();
+        }
+
+        return null;
+      })
+      .filter(Boolean);
+
+    return Array.from(new Set(labels));
+  }, [alarmState]);
+
   async function handleDownloadPDF() {
     if (pdfProgress.running) {
       return;
@@ -946,8 +968,25 @@ const SensorDetail = () => {
             <div>
               <p className="text-sm font-semibold uppercase tracking-wide">Alarma activa</p>
               <p className="text-sm">
-                Este sensor esta en estado de alarma. Puedes marcarla como atendida.
+                Este sensor esta en estado de alarma. Para desctivarla presiona el botón.
               </p>
+              {activeAlarmLabels.length > 0 ? (
+                <>
+                  <p className="mt-2 text-sm font-medium">
+                    Estas alarmas se marcaran como &quot;Atendidas&quot;:
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {activeAlarmLabels.map((label) => (
+                      <span
+                        key={label}
+                        className="rounded-full border border-red-200 bg-white px-2 py-0.5 text-xs font-semibold text-red-700"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </div>
             <button
               type="button"
@@ -955,7 +994,11 @@ const SensorDetail = () => {
               disabled={attendingAlarm}
               className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-300"
             >
-              {attendingAlarm ? "Atendiendo..." : "Desactivar alarma"}
+              {attendingAlarm
+                ? "Atendiendo..."
+                : activeAlarmLabels.length > 1
+                  ? `Desactivar ${activeAlarmLabels.length} alarmas`
+                  : "Desactivar alarma"}
             </button>
           </div>
         </div>
