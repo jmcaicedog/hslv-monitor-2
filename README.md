@@ -159,8 +159,9 @@ Variables que debes configurar en Vercel:
 - `CRON_SECRET`
 - `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `10`)
 - `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional, recomendado inicial: `2016`)
-- `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `25000`)
-- `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `7000`)
+- `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `18000`)
+- `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `4500`)
+- `CRON_FEEDS_RESULTS_LIMIT` (opcional, recomendado: `288`)
 - `CRON_ENABLE_RETRY` (opcional, recomendado: `false` para cron HTTP)
 
 Recomendacion operativa para evitar `429` y completar datos en iteraciones:

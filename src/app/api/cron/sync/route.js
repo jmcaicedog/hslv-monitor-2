@@ -53,13 +53,19 @@ export async function GET(request) {
     const timeBudgetMs =
       Number.isFinite(softTimeoutFromEnv) && softTimeoutFromEnv >= 5000
         ? Math.floor(softTimeoutFromEnv)
-        : 25000;
+        : 18000;
 
     const requestTimeoutFromEnv = Number(process.env.UBIBOT_SYNC_REQUEST_TIMEOUT_MS);
     const requestTimeoutMs =
       Number.isFinite(requestTimeoutFromEnv) && requestTimeoutFromEnv >= 1000
         ? Math.floor(requestTimeoutFromEnv)
-        : 7000;
+        : 4500;
+
+    const cronFeedsLimitFromEnv = Number(process.env.CRON_FEEDS_RESULTS_LIMIT);
+    const feedsResultsLimit =
+      Number.isFinite(cronFeedsLimitFromEnv) && cronFeedsLimitFromEnv > 0
+        ? Math.floor(cronFeedsLimitFromEnv)
+        : 288;
 
     const cronRetryFlag = (process.env.CRON_ENABLE_RETRY || "false").trim().toLowerCase();
     const enableRetry = cronRetryFlag === "1" || cronRetryFlag === "true";
@@ -68,7 +74,9 @@ export async function GET(request) {
       maxChannelsPerRun,
       timeBudgetMs,
       requestTimeoutMs,
+      feedsResultsLimit,
       enableRetry,
+      skipSeriesOnLowBudget: true,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

@@ -249,6 +249,7 @@ async function fetchFeedsSeries({
   sensorId,
   apiKey,
   accountKey,
+  feedsResultsLimit,
   requestTimeoutMs,
   enableRetry,
   deadlineAt,
@@ -279,7 +280,7 @@ async function fetchFeedsSeries({
 
   for (const attempt of attempts) {
     const params = new URLSearchParams();
-    params.set("results", String(FEEDS_RESULTS_LIMIT));
+    params.set("results", String(feedsResultsLimit));
 
     Object.entries(attempt.params).forEach(([key, value]) => {
       if (value) {
@@ -389,6 +390,30 @@ async function clearPendingSensor(sensorId) {
   await query(`DELETE FROM sync_pending_sensors WHERE sensor_id = $1;`, [sensorId]);
 }
 
+async function deferPendingSensor(sensorId, reason = "deferred_time_budget") {
+  await query(
+    `
+      INSERT INTO sync_pending_sensors (sensor_id, attempts, last_error, next_retry_at, updated_at)
+      VALUES (
+        $1,
+        0,
+        LEFT($2, 400),
+        NOW() + INTERVAL '5 minutes',
+        NOW()
+      )
+      ON CONFLICT (sensor_id)
+      DO UPDATE SET
+        last_error = LEFT(EXCLUDED.last_error, 400),
+        next_retry_at = LEAST(
+          sync_pending_sensors.next_retry_at,
+          NOW() + INTERVAL '5 minutes'
+        ),
+        updated_at = NOW();
+    `,
+    [sensorId, String(reason)]
+  );
+}
+
 async function markPendingSensorFailure(sensorId, reason) {
   await query(
     `
@@ -430,8 +455,13 @@ export async function runUbiBotSync(options = {}) {
     options.requestTimeoutMs,
     parsePositiveInt(process.env.UBIBOT_SYNC_REQUEST_TIMEOUT_MS, 10000)
   );
+  const feedsResultsLimit = parsePositiveInt(
+    options.feedsResultsLimit,
+    FEEDS_RESULTS_LIMIT
+  );
   const enableRetry =
     typeof options.enableRetry === "boolean" ? options.enableRetry : UBIBOT_ENABLE_RETRY;
+  const skipSeriesOnLowBudget = options.skipSeriesOnLowBudget === true;
 
   const maxChannelsPerRun = parsePositiveInt(
     options.maxChannelsPerRun,
@@ -520,6 +550,7 @@ export async function runUbiBotSync(options = {}) {
   const failedSensorIds = [];
   let processedBaseChannels = 0;
   let stoppedDueToTimeBudget = false;
+  let deferredSeriesChannels = 0;
 
   for (const channel of effectiveChannelsToProcess) {
     if (getRemainingMs(deadlineAt) <= 1200) {
@@ -590,11 +621,27 @@ export async function runUbiBotSync(options = {}) {
         totalInserted += batch.length;
       }
 
+      const shouldDeferSeriesNow =
+        skipSeriesOnLowBudget &&
+        Number.isFinite(deadlineAt) &&
+        getRemainingMs(deadlineAt) <= Math.max(2000, requestTimeoutMs + 1200);
+
+      if (shouldDeferSeriesNow) {
+        deferredSeriesChannels += 1;
+        await deferPendingSensor(sensorId, "deferred_series_low_budget");
+        syncedChannels += 1;
+        if (!duePendingSet.has(sensorId)) {
+          processedBaseChannels += 1;
+        }
+        continue;
+      }
+
       const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
       const feedsPayload = await fetchFeedsSeries({
         sensorId,
         apiKey: apiKeyForChannel,
         accountKey,
+        feedsResultsLimit,
         requestTimeoutMs,
         enableRetry,
         deadlineAt,
@@ -678,9 +725,11 @@ export async function runUbiBotSync(options = {}) {
     pendingRetries: pendingSummary.rows[0]?.count || 0,
     retriedFromPending,
     duePendingTotal: duePendingSensorIds.length,
+    deferredSeriesChannels,
     stoppedDueToTimeBudget,
     elapsedMs,
     timeBudgetMs: Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
+    feedsResultsLimit,
     totalInserted,
   };
 }
