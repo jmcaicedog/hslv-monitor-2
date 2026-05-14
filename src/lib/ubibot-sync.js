@@ -1,5 +1,6 @@
 import { ensureSensorSchema } from "./sensor-db.js";
-import { query } from "./db.js";
+import { query, withDbClient } from "./db.js";
+import { randomUUID } from "node:crypto";
 
 const BATCH_SIZE = 1000;
 const DEFAULT_FEEDS_RESULTS_LIMIT = 2016;
@@ -12,6 +13,9 @@ const UBIBOT_RETRY_BACKOFF_MS = 4000;
 const UBIBOT_ENABLE_RETRY = process.env.UBIBOT_ENABLE_RETRY === "true";
 const PENDING_RETRY_BATCH_LIMIT = 200;
 const SYNC_CURSOR_STATE_KEY = "channel_cursor";
+const MAX_PENDING_ATTEMPTS = 30;
+const SYNC_LOCK_KEY_A = 240513;
+const SYNC_LOCK_KEY_B = 99871;
 
 function parsePositiveInt(raw, fallback = 0) {
   const parsed = Number(raw);
@@ -427,21 +431,109 @@ async function markPendingSensorFailure(sensorId, reason) {
       )
       ON CONFLICT (sensor_id)
       DO UPDATE SET
-        attempts = sync_pending_sensors.attempts + 1,
+        attempts = LEAST(sync_pending_sensors.attempts + 1, $3),
         last_error = LEFT(EXCLUDED.last_error, 400),
-        next_retry_at = NOW() + make_interval(
-          mins => LEAST(
-            120,
-            5 * (2 ^ LEAST(sync_pending_sensors.attempts, 5))::int
+        next_retry_at = CASE
+          WHEN sync_pending_sensors.attempts >= $3 THEN NOW() + INTERVAL '12 hours'
+          ELSE NOW() + make_interval(
+            mins => LEAST(
+              120,
+              5 * (2 ^ LEAST(sync_pending_sensors.attempts, 5))::int
+            )
           )
-        ),
+        END,
         updated_at = NOW();
     `,
-    [sensorId, String(reason || "sync_failed")]
+    [sensorId, String(reason || "sync_failed"), MAX_PENDING_ATTEMPTS]
   );
 }
 
-export async function runUbiBotSync(options = {}) {
+async function runWithSyncAdvisoryLock(callback) {
+  return withDbClient(async (client) => {
+    const lockResult = await client.query(
+      `SELECT pg_try_advisory_lock($1::integer, $2::integer) AS acquired;`,
+      [SYNC_LOCK_KEY_A, SYNC_LOCK_KEY_B]
+    );
+
+    const acquired = Boolean(lockResult.rows[0]?.acquired);
+    if (!acquired) {
+      return { acquired: false, result: null };
+    }
+
+    try {
+      const result = await callback();
+      return { acquired: true, result };
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock($1::integer, $2::integer);`, [
+        SYNC_LOCK_KEY_A,
+        SYNC_LOCK_KEY_B,
+      ]);
+    }
+  });
+}
+
+async function persistSyncRunMetrics(metrics) {
+  await query(
+    `
+      INSERT INTO sync_run_metrics (
+        run_id,
+        attempted_channels,
+        processed_channels,
+        synced_channels,
+        failed_channels,
+        deferred_series_channels,
+        deferred_unprocessed_channels,
+        pending_retries,
+        retried_from_pending,
+        due_pending_total,
+        elapsed_ms,
+        time_budget_ms,
+        feeds_results_limit,
+        stopped_due_to_time_budget,
+        lock_skipped
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12, $13, $14, $15
+      )
+      ON CONFLICT (run_id)
+      DO UPDATE SET
+        attempted_channels = EXCLUDED.attempted_channels,
+        processed_channels = EXCLUDED.processed_channels,
+        synced_channels = EXCLUDED.synced_channels,
+        failed_channels = EXCLUDED.failed_channels,
+        deferred_series_channels = EXCLUDED.deferred_series_channels,
+        deferred_unprocessed_channels = EXCLUDED.deferred_unprocessed_channels,
+        pending_retries = EXCLUDED.pending_retries,
+        retried_from_pending = EXCLUDED.retried_from_pending,
+        due_pending_total = EXCLUDED.due_pending_total,
+        elapsed_ms = EXCLUDED.elapsed_ms,
+        time_budget_ms = EXCLUDED.time_budget_ms,
+        feeds_results_limit = EXCLUDED.feeds_results_limit,
+        stopped_due_to_time_budget = EXCLUDED.stopped_due_to_time_budget,
+        lock_skipped = EXCLUDED.lock_skipped;
+    `,
+    [
+      metrics.runId,
+      metrics.attemptedChannels,
+      metrics.processedChannels,
+      metrics.syncedChannels,
+      metrics.failedChannels,
+      metrics.deferredSeriesChannels,
+      metrics.deferredUnprocessedChannels,
+      metrics.pendingRetries,
+      metrics.retriedFromPending,
+      metrics.duePendingTotal,
+      metrics.elapsedMs,
+      metrics.timeBudgetMs,
+      metrics.feedsResultsLimit,
+      metrics.stoppedDueToTimeBudget,
+      metrics.lockSkipped,
+    ]
+  );
+}
+
+async function runUbiBotSyncUnlocked(options = {}) {
   await ensureSensorSchema();
 
   const timeBudgetMs = parsePositiveInt(
@@ -449,6 +541,7 @@ export async function runUbiBotSync(options = {}) {
     parsePositiveInt(process.env.UBIBOT_SYNC_TIME_BUDGET_MS, 0)
   );
   const startedAt = nowMs();
+  const runId = randomUUID();
   const deadlineAt =
     timeBudgetMs > 0 ? startedAt + Math.max(1000, timeBudgetMs) : Number.POSITIVE_INFINITY;
   const requestTimeoutMs = parsePositiveInt(
@@ -551,10 +644,28 @@ export async function runUbiBotSync(options = {}) {
   let processedBaseChannels = 0;
   let stoppedDueToTimeBudget = false;
   let deferredSeriesChannels = 0;
+  let deferredUnprocessedChannels = 0;
 
-  for (const channel of effectiveChannelsToProcess) {
+  for (let channelIndex = 0; channelIndex < effectiveChannelsToProcess.length; channelIndex += 1) {
+    const channel = effectiveChannelsToProcess[channelIndex];
+
     if (getRemainingMs(deadlineAt) <= 1200) {
       stoppedDueToTimeBudget = true;
+
+      for (
+        let pendingIndex = channelIndex;
+        pendingIndex < effectiveChannelsToProcess.length;
+        pendingIndex += 1
+      ) {
+        const pendingChannel = effectiveChannelsToProcess[pendingIndex];
+        const pendingSensorId = Number(pendingChannel?.channel_id);
+
+        if (!Number.isFinite(pendingSensorId)) continue;
+
+        await deferPendingSensor(pendingSensorId, "deferred_run_deadline");
+        deferredUnprocessedChannels += 1;
+      }
+
       break;
     }
 
@@ -715,7 +826,8 @@ export async function runUbiBotSync(options = {}) {
   const pendingSummary = await query(`SELECT COUNT(*)::int AS count FROM sync_pending_sensors;`);
   const elapsedMs = nowMs() - startedAt;
 
-  return {
+  const result = {
+    runId,
     attemptedChannels: effectiveChannelsToProcess.length,
     processedChannels: syncedChannels + failedChannels,
     maxChannelsPerRun,
@@ -726,10 +838,83 @@ export async function runUbiBotSync(options = {}) {
     retriedFromPending,
     duePendingTotal: duePendingSensorIds.length,
     deferredSeriesChannels,
+    deferredUnprocessedChannels,
     stoppedDueToTimeBudget,
     elapsedMs,
     timeBudgetMs: Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
     feedsResultsLimit,
     totalInserted,
+    lockSkipped: false,
   };
+
+  await persistSyncRunMetrics({
+    runId: result.runId,
+    attemptedChannels: result.attemptedChannels,
+    processedChannels: result.processedChannels,
+    syncedChannels: result.syncedChannels,
+    failedChannels: result.failedChannels,
+    deferredSeriesChannels: result.deferredSeriesChannels,
+    deferredUnprocessedChannels: result.deferredUnprocessedChannels,
+    pendingRetries: result.pendingRetries,
+    retriedFromPending: result.retriedFromPending,
+    duePendingTotal: result.duePendingTotal,
+    elapsedMs: result.elapsedMs,
+    timeBudgetMs: result.timeBudgetMs,
+    feedsResultsLimit: result.feedsResultsLimit,
+    stoppedDueToTimeBudget: result.stoppedDueToTimeBudget,
+    lockSkipped: result.lockSkipped,
+  });
+
+  return result;
+}
+
+export async function runUbiBotSync(options = {}) {
+  const lockResult = await runWithSyncAdvisoryLock(() => runUbiBotSyncUnlocked(options));
+  if (lockResult.acquired) {
+    return lockResult.result;
+  }
+
+  const lockSkippedResult = {
+    runId: randomUUID(),
+    attemptedChannels: 0,
+    processedChannels: 0,
+    maxChannelsPerRun: parsePositiveInt(
+      options.maxChannelsPerRun,
+      parsePositiveInt(process.env.UBIBOT_MAX_CHANNELS_PER_RUN, 0)
+    ),
+    syncedChannels: 0,
+    failedChannels: 0,
+    failedSensorIds: [],
+    pendingRetries: 0,
+    retriedFromPending: 0,
+    duePendingTotal: 0,
+    deferredSeriesChannels: 0,
+    deferredUnprocessedChannels: 0,
+    stoppedDueToTimeBudget: false,
+    elapsedMs: 0,
+    timeBudgetMs: null,
+    feedsResultsLimit: parsePositiveInt(options.feedsResultsLimit, FEEDS_RESULTS_LIMIT),
+    totalInserted: 0,
+    lockSkipped: true,
+  };
+
+  await persistSyncRunMetrics({
+    runId: lockSkippedResult.runId,
+    attemptedChannels: lockSkippedResult.attemptedChannels,
+    processedChannels: lockSkippedResult.processedChannels,
+    syncedChannels: lockSkippedResult.syncedChannels,
+    failedChannels: lockSkippedResult.failedChannels,
+    deferredSeriesChannels: lockSkippedResult.deferredSeriesChannels,
+    deferredUnprocessedChannels: lockSkippedResult.deferredUnprocessedChannels,
+    pendingRetries: lockSkippedResult.pendingRetries,
+    retriedFromPending: lockSkippedResult.retriedFromPending,
+    duePendingTotal: lockSkippedResult.duePendingTotal,
+    elapsedMs: lockSkippedResult.elapsedMs,
+    timeBudgetMs: lockSkippedResult.timeBudgetMs,
+    feedsResultsLimit: lockSkippedResult.feedsResultsLimit,
+    stoppedDueToTimeBudget: lockSkippedResult.stoppedDueToTimeBudget,
+    lockSkipped: lockSkippedResult.lockSkipped,
+  });
+
+  return lockSkippedResult;
 }

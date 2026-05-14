@@ -78,6 +78,11 @@ export async function GET(request) {
       enableRetry,
       skipSeriesOnLowBudget: true,
     });
+
+    if (result.lockSkipped) {
+      return NextResponse.json({ ok: true, ...result }, { status: 202 });
+    }
+
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed";

@@ -80,6 +80,32 @@ export async function ensureSensorSchema() {
     );
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS sync_run_metrics (
+      run_id TEXT PRIMARY KEY,
+      attempted_channels INTEGER NOT NULL,
+      processed_channels INTEGER NOT NULL,
+      synced_channels INTEGER NOT NULL,
+      failed_channels INTEGER NOT NULL,
+      deferred_series_channels INTEGER NOT NULL,
+      deferred_unprocessed_channels INTEGER NOT NULL DEFAULT 0,
+      pending_retries INTEGER NOT NULL,
+      retried_from_pending INTEGER NOT NULL,
+      due_pending_total INTEGER NOT NULL,
+      elapsed_ms INTEGER NOT NULL,
+      time_budget_ms INTEGER,
+      feeds_results_limit INTEGER NOT NULL,
+      stopped_due_to_time_budget BOOLEAN NOT NULL DEFAULT FALSE,
+      lock_skipped BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_sync_run_metrics_created_at
+      ON sync_run_metrics(created_at DESC);
+  `);
+
   schemaEnsured = true;
 }
 

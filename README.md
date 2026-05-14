@@ -170,6 +170,10 @@ Recomendacion operativa para evitar `429` y completar datos en iteraciones:
 - El sistema prioriza sensores pendientes de corrida anterior y los reintenta automaticamente.
 - Con limite por corrida activo, los canales se procesan en rotacion entre ejecuciones para evitar que siempre se sincronicen los mismos primeros sensores.
 
+Observabilidad y concurrencia del cron:
+- La sincronizacion registra metricas por corrida en la tabla `sync_run_metrics`.
+- Si una corrida detecta otra sincronizacion activa (lock advisory), responde `202` con `lockSkipped=true` para evitar solapamiento.
+
 ### Operacion sugerida
 
 1. Ejecutar una vez `npm run db:init`.

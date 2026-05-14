@@ -29,3 +29,14 @@ export async function query(text, params = []) {
   const pool = getPool();
   return pool.query(text, params);
 }
+
+export async function withDbClient(callback) {
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    return await callback(client);
+  } finally {
+    client.release();
+  }
+}
