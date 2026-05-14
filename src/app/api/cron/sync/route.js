@@ -49,7 +49,27 @@ export async function GET(request) {
         ? Math.floor(maxChannelsFromEnv)
         : 10;
 
-    const result = await runUbiBotSync({ maxChannelsPerRun });
+    const softTimeoutFromEnv = Number(process.env.CRON_SOFT_TIMEOUT_MS);
+    const timeBudgetMs =
+      Number.isFinite(softTimeoutFromEnv) && softTimeoutFromEnv >= 5000
+        ? Math.floor(softTimeoutFromEnv)
+        : 25000;
+
+    const requestTimeoutFromEnv = Number(process.env.UBIBOT_SYNC_REQUEST_TIMEOUT_MS);
+    const requestTimeoutMs =
+      Number.isFinite(requestTimeoutFromEnv) && requestTimeoutFromEnv >= 1000
+        ? Math.floor(requestTimeoutFromEnv)
+        : 7000;
+
+    const cronRetryFlag = (process.env.CRON_ENABLE_RETRY || "false").trim().toLowerCase();
+    const enableRetry = cronRetryFlag === "1" || cronRetryFlag === "true";
+
+    const result = await runUbiBotSync({
+      maxChannelsPerRun,
+      timeBudgetMs,
+      requestTimeoutMs,
+      enableRetry,
+    });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed";

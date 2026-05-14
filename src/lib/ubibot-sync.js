@@ -36,6 +36,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function nowMs() {
+  return Date.now();
+}
+
+function getRemainingMs(deadlineAt) {
+  if (!Number.isFinite(deadlineAt)) return Number.POSITIVE_INFINITY;
+  return deadlineAt - nowMs();
+}
+
 function parseRetryAfterMs(response, bodyText) {
   const retryAfter = response.headers.get("retry-after");
   if (retryAfter) {
@@ -56,12 +65,63 @@ function parseRetryAfterMs(response, bodyText) {
   return null;
 }
 
-async function fetchJsonWithRetry(url, { label, maxRetries = UBIBOT_MAX_RETRIES } = {}) {
-  const allowedRetries = UBIBOT_ENABLE_RETRY ? maxRetries : 0;
+async function fetchJsonWithRetry(
+  url,
+  {
+    label,
+    maxRetries = UBIBOT_MAX_RETRIES,
+    enableRetry = UBIBOT_ENABLE_RETRY,
+    timeoutMs = 10000,
+    deadlineAt = Number.POSITIVE_INFINITY,
+  } = {}
+) {
+  const allowedRetries = enableRetry ? maxRetries : 0;
 
   for (let attempt = 0; attempt <= allowedRetries; attempt += 1) {
-    const response = await fetch(url);
-    const rawBody = await response.text();
+    const remainingMs = getRemainingMs(deadlineAt);
+    if (remainingMs <= 0) {
+      return {
+        ok: false,
+        status: 408,
+        payload: null,
+        rawBody: "deadline_exceeded",
+      };
+    }
+
+    const effectiveTimeoutMs = Math.max(1000, Math.min(timeoutMs, remainingMs));
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), effectiveTimeoutMs);
+
+    let response;
+    let rawBody = "";
+
+    try {
+      response = await fetch(url, { signal: controller.signal });
+      rawBody = await response.text();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      const isAbort =
+        error instanceof Error &&
+        (error.name === "AbortError" || /aborted|timeout/i.test(error.message));
+
+      if (isAbort) {
+        return {
+          ok: false,
+          status: 408,
+          payload: null,
+          rawBody: "request_timeout",
+        };
+      }
+
+      return {
+        ok: false,
+        status: 0,
+        payload: null,
+        rawBody: error instanceof Error ? error.message : "fetch_error",
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     let payload = null;
     try {
@@ -85,6 +145,10 @@ async function fetchJsonWithRetry(url, { label, maxRetries = UBIBOT_MAX_RETRIES 
 
     const retryAfterMs = parseRetryAfterMs(response, bodyText);
     const waitMs = retryAfterMs ?? UBIBOT_RETRY_BACKOFF_MS * (attempt + 1);
+    if (getRemainingMs(deadlineAt) - waitMs <= 0) {
+      return { ok: false, status: 408, payload, rawBody: "deadline_before_retry" };
+    }
+
     console.warn(
       `[ubibot-sync] ${label || "request"} limitado por rate limit (${response.status}). Reintentando en ${Math.ceil(waitMs / 1000)}s...`
     );
@@ -181,7 +245,14 @@ async function upsertReadings(rows, source) {
   );
 }
 
-async function fetchFeedsSeries({ sensorId, apiKey, accountKey }) {
+async function fetchFeedsSeries({
+  sensorId,
+  apiKey,
+  accountKey,
+  requestTimeoutMs,
+  enableRetry,
+  deadlineAt,
+}) {
   const attempts = [];
 
   if (apiKey) {
@@ -218,7 +289,12 @@ async function fetchFeedsSeries({ sensorId, apiKey, accountKey }) {
 
     const result = await fetchJsonWithRetry(
       `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?${params.toString()}`,
-      { label: attempt.label }
+      {
+        label: attempt.label,
+        timeoutMs: requestTimeoutMs,
+        enableRetry,
+        deadlineAt,
+      }
     );
 
     if (!result.ok) {
@@ -343,6 +419,20 @@ async function markPendingSensorFailure(sensorId, reason) {
 export async function runUbiBotSync(options = {}) {
   await ensureSensorSchema();
 
+  const timeBudgetMs = parsePositiveInt(
+    options.timeBudgetMs,
+    parsePositiveInt(process.env.UBIBOT_SYNC_TIME_BUDGET_MS, 0)
+  );
+  const startedAt = nowMs();
+  const deadlineAt =
+    timeBudgetMs > 0 ? startedAt + Math.max(1000, timeBudgetMs) : Number.POSITIVE_INFINITY;
+  const requestTimeoutMs = parsePositiveInt(
+    options.requestTimeoutMs,
+    parsePositiveInt(process.env.UBIBOT_SYNC_REQUEST_TIMEOUT_MS, 10000)
+  );
+  const enableRetry =
+    typeof options.enableRetry === "boolean" ? options.enableRetry : UBIBOT_ENABLE_RETRY;
+
   const maxChannelsPerRun = parsePositiveInt(
     options.maxChannelsPerRun,
     parsePositiveInt(process.env.UBIBOT_MAX_CHANNELS_PER_RUN, 0)
@@ -357,7 +447,12 @@ export async function runUbiBotSync(options = {}) {
 
   const channelsResult = await fetchJsonWithRetry(
     `https://webapi.ubibot.com/channels?account_key=${accountKey}`,
-    { label: "channels" }
+    {
+      label: "channels",
+      timeoutMs: requestTimeoutMs,
+      enableRetry,
+      deadlineAt,
+    }
   );
 
   if (!channelsResult.ok) {
@@ -419,27 +514,19 @@ export async function runUbiBotSync(options = {}) {
     return duePendingSet.has(sensorId) ? count + 1 : count;
   }, 0);
 
-  if (useChannelRotation && sortedBaseChannels.length > 0) {
-    const baseProcessedInThisRun = effectiveChannelsToProcess.reduce((count, channel) => {
-      const sensorId = Number(channel.channel_id);
-      if (!Number.isFinite(sensorId)) return count;
-      return duePendingSet.has(sensorId) ? count : count + 1;
-    }, 0);
-
-    const nextCursor =
-      sortedBaseChannels.length > 0
-        ? (baseCursor + baseProcessedInThisRun) % sortedBaseChannels.length
-        : 0;
-
-    await setChannelCursor(nextCursor);
-  }
-
   let totalInserted = 0;
   let syncedChannels = 0;
   let failedChannels = 0;
   const failedSensorIds = [];
+  let processedBaseChannels = 0;
+  let stoppedDueToTimeBudget = false;
 
   for (const channel of effectiveChannelsToProcess) {
+    if (getRemainingMs(deadlineAt) <= 1200) {
+      stoppedDueToTimeBudget = true;
+      break;
+    }
+
     const sensorId = Number(channel.channel_id);
     if (!Number.isFinite(sensorId)) continue;
 
@@ -508,6 +595,9 @@ export async function runUbiBotSync(options = {}) {
         sensorId,
         apiKey: apiKeyForChannel,
         accountKey,
+        requestTimeoutMs,
+        enableRetry,
+        deadlineAt,
       });
 
       let readings = [];
@@ -521,7 +611,12 @@ export async function runUbiBotSync(options = {}) {
       } else {
         const summaryResult = await fetchJsonWithRetry(
           `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
-          { label: `summary sensor ${sensorId}` }
+          {
+            label: `summary sensor ${sensorId}`,
+            timeoutMs: requestTimeoutMs,
+            enableRetry,
+            deadlineAt,
+          }
         );
 
         if (!summaryResult.ok) {
@@ -547,18 +642,35 @@ export async function runUbiBotSync(options = {}) {
       }
 
       syncedChannels += 1;
+      if (!duePendingSet.has(sensorId)) {
+        processedBaseChannels += 1;
+      }
     } catch (error) {
       failedChannels += 1;
       failedSensorIds.push(sensorId);
       const message = error instanceof Error ? error.message : "unexpected_error";
       await markPendingSensorFailure(sensorId, message);
+      if (!duePendingSet.has(sensorId)) {
+        processedBaseChannels += 1;
+      }
     }
   }
 
+  if (useChannelRotation && sortedBaseChannels.length > 0) {
+    const nextCursor =
+      sortedBaseChannels.length > 0
+        ? (baseCursor + processedBaseChannels) % sortedBaseChannels.length
+        : 0;
+
+    await setChannelCursor(nextCursor);
+  }
+
   const pendingSummary = await query(`SELECT COUNT(*)::int AS count FROM sync_pending_sensors;`);
+  const elapsedMs = nowMs() - startedAt;
 
   return {
     attemptedChannels: effectiveChannelsToProcess.length,
+    processedChannels: syncedChannels + failedChannels,
     maxChannelsPerRun,
     syncedChannels,
     failedChannels,
@@ -566,6 +678,9 @@ export async function runUbiBotSync(options = {}) {
     pendingRetries: pendingSummary.rows[0]?.count || 0,
     retriedFromPending,
     duePendingTotal: duePendingSensorIds.length,
+    stoppedDueToTimeBudget,
+    elapsedMs,
+    timeBudgetMs: Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
     totalInserted,
   };
 }
