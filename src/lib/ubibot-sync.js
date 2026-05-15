@@ -282,6 +282,7 @@ async function fetchFeedsSeries({
   }
 
   let lastStatus = 0;
+  let accountKeyDenied = false;
 
   for (const attempt of attempts) {
     const params = new URLSearchParams();
@@ -305,6 +306,12 @@ async function fetchFeedsSeries({
 
     if (!result.ok) {
       lastStatus = result.status || lastStatus;
+
+      const usedAccountKey = Boolean(attempt.params?.account_key);
+      if (usedAccountKey && result.status === 401) {
+        accountKeyDenied = true;
+      }
+
       continue;
     }
 
@@ -321,7 +328,13 @@ async function fetchFeedsSeries({
     }
   }
 
-  return { ok: false, status: lastStatus, feeds: [], source: null };
+  return {
+    ok: false,
+    status: lastStatus,
+    feeds: [],
+    source: null,
+    accountKeyDenied,
+  };
 }
 
 async function getDuePendingSensorIds() {
@@ -546,12 +559,14 @@ async function persistSyncRunMetrics(metrics) {
         pending_quota_share,
         rate_limit_hits,
         request_timeout_hits,
+        feeds_permission_denied_hits,
+        account_key_feeds_denied_mode,
         circuit_broken
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11, $12, $13, $14, $15,
-        $16, $17, $18, $19
+        $16, $17, $18, $19, $20, $21
       )
       ON CONFLICT (run_id)
       DO UPDATE SET
@@ -572,6 +587,8 @@ async function persistSyncRunMetrics(metrics) {
         pending_quota_share = EXCLUDED.pending_quota_share,
         rate_limit_hits = EXCLUDED.rate_limit_hits,
         request_timeout_hits = EXCLUDED.request_timeout_hits,
+        feeds_permission_denied_hits = EXCLUDED.feeds_permission_denied_hits,
+        account_key_feeds_denied_mode = EXCLUDED.account_key_feeds_denied_mode,
         circuit_broken = EXCLUDED.circuit_broken;
     `,
     [
@@ -593,6 +610,8 @@ async function persistSyncRunMetrics(metrics) {
       metrics.pendingQuotaShare,
       metrics.rateLimitHits,
       metrics.requestTimeoutHits,
+      metrics.feedsPermissionDeniedHits,
+      metrics.accountKeyFeedsDeniedMode,
       metrics.circuitBroken,
     ]
   );
@@ -730,6 +749,8 @@ async function runUbiBotSyncUnlocked(options = {}) {
   let rateLimitHits = 0;
   let requestTimeoutHits = 0;
   let circuitBroken = false;
+  let accountKeyFeedsDeniedMode = false;
+  let feedsPermissionDeniedHits = 0;
 
   for (let channelIndex = 0; channelIndex < effectiveChannelsToProcess.length; channelIndex += 1) {
     const channel = effectiveChannelsToProcess[channelIndex];
@@ -824,15 +845,24 @@ async function runUbiBotSyncUnlocked(options = {}) {
       }
 
       const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
-      const feedsPayload = await fetchFeedsSeries({
-        sensorId,
-        apiKey: apiKeyForChannel,
-        accountKey,
-        feedsResultsLimit,
-        requestTimeoutMs,
-        enableRetry,
-        deadlineAt,
-      });
+      const feedsPayload =
+        accountKeyFeedsDeniedMode && !apiKeyForChannel
+          ? {
+              ok: false,
+              status: 401,
+              feeds: [],
+              source: null,
+              accountKeyDenied: true,
+            }
+          : await fetchFeedsSeries({
+              sensorId,
+              apiKey: apiKeyForChannel,
+              accountKey,
+              feedsResultsLimit,
+              requestTimeoutMs,
+              enableRetry,
+              deadlineAt,
+            });
 
       if (!feedsPayload.ok) {
         if (feedsPayload.status === 429) {
@@ -841,6 +871,11 @@ async function runUbiBotSyncUnlocked(options = {}) {
 
         if (feedsPayload.status === 408) {
           requestTimeoutHits += 1;
+        }
+
+        if (feedsPayload.status === 401 && feedsPayload.accountKeyDenied) {
+          feedsPermissionDeniedHits += 1;
+          accountKeyFeedsDeniedMode = true;
         }
       }
 
@@ -872,7 +907,14 @@ async function runUbiBotSyncUnlocked(options = {}) {
         sourceForSeries = feedsPayload.source || "api_feed";
         seriesFetchSucceeded = true;
       } else {
-        if (skipSummaryFallbackOnFeedFailure && feedsPayload.status > 0) {
+        const allowSummaryFallbackFor401 =
+          feedsPayload.status === 401 && feedsPayload.accountKeyDenied;
+
+        if (
+          skipSummaryFallbackOnFeedFailure &&
+          feedsPayload.status > 0 &&
+          !allowSummaryFallbackFor401
+        ) {
           failedChannels += 1;
           failedSensorIds.push(sensorId);
           await markPendingSensorFailure(sensorId, `feeds_status_${feedsPayload.status}`);
@@ -975,6 +1017,8 @@ async function runUbiBotSyncUnlocked(options = {}) {
     pendingQuotaShare,
     rateLimitHits,
     requestTimeoutHits,
+    feedsPermissionDeniedHits,
+    accountKeyFeedsDeniedMode,
     circuitBroken,
     stoppedDueToTimeBudget,
     elapsedMs,
@@ -1003,6 +1047,8 @@ async function runUbiBotSyncUnlocked(options = {}) {
     pendingQuotaShare: result.pendingQuotaShare,
     rateLimitHits: result.rateLimitHits,
     requestTimeoutHits: result.requestTimeoutHits,
+    feedsPermissionDeniedHits: result.feedsPermissionDeniedHits,
+    accountKeyFeedsDeniedMode: result.accountKeyFeedsDeniedMode,
     circuitBroken: result.circuitBroken,
   });
 
@@ -1041,6 +1087,8 @@ export async function runUbiBotSync(options = {}) {
     ),
     rateLimitHits: 0,
     requestTimeoutHits: 0,
+    feedsPermissionDeniedHits: 0,
+    accountKeyFeedsDeniedMode: false,
     circuitBroken: false,
     totalInserted: 0,
     lockSkipped: true,
@@ -1065,6 +1113,8 @@ export async function runUbiBotSync(options = {}) {
     pendingQuotaShare: lockSkippedResult.pendingQuotaShare,
     rateLimitHits: lockSkippedResult.rateLimitHits,
     requestTimeoutHits: lockSkippedResult.requestTimeoutHits,
+    feedsPermissionDeniedHits: lockSkippedResult.feedsPermissionDeniedHits,
+    accountKeyFeedsDeniedMode: lockSkippedResult.accountKeyFeedsDeniedMode,
     circuitBroken: lockSkippedResult.circuitBroken,
   });
 

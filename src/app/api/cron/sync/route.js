@@ -84,7 +84,15 @@ export async function GET(request) {
     const cronRetryFlag = (process.env.CRON_ENABLE_RETRY || "false").trim().toLowerCase();
     const enableRetry = cronRetryFlag === "1" || cronRetryFlag === "true";
 
-    const result = await runUbiBotSync({
+    const hardResponseTimeoutFromEnv = Number(process.env.CRON_HARD_RESPONSE_TIMEOUT_MS);
+    const hardResponseTimeoutMs =
+      Number.isFinite(hardResponseTimeoutFromEnv) && hardResponseTimeoutFromEnv >= 5000
+        ? Math.floor(hardResponseTimeoutFromEnv)
+        : 22000;
+
+    const timeoutMarker = Symbol("cron_response_timeout");
+
+    const syncPromise = runUbiBotSync({
       maxChannelsPerRun,
       timeBudgetMs,
       requestTimeoutMs,
@@ -94,7 +102,32 @@ export async function GET(request) {
       enableRetry,
       skipSeriesOnLowBudget: true,
       skipSummaryFallbackOnFeedFailure: true,
-    });
+    }).catch((error) => ({ __syncError: error }));
+
+    const raceResult = await Promise.race([
+      syncPromise,
+      new Promise((resolve) => {
+        setTimeout(() => resolve(timeoutMarker), hardResponseTimeoutMs);
+      }),
+    ]);
+
+    if (raceResult === timeoutMarker) {
+      return NextResponse.json(
+        {
+          ok: true,
+          accepted: true,
+          timedOutBeforeResponse: true,
+          message: "Cron respondio con guard timeout para evitar corte externo de 30s.",
+        },
+        { status: 202 }
+      );
+    }
+
+    if (raceResult?.__syncError) {
+      throw raceResult.__syncError;
+    }
+
+    const result = raceResult;
 
     if (result.lockSkipped) {
       return NextResponse.json({ ok: true, ...result }, { status: 202 });
@@ -103,6 +136,28 @@ export async function GET(request) {
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed";
+
+    const normalized = String(message || "").toLowerCase();
+    const transientInfraError =
+      normalized.includes("connection timeout") ||
+      normalized.includes("connection terminated") ||
+      normalized.includes("timeout") ||
+      normalized.includes("57p03") ||
+      normalized.includes("database") ||
+      normalized.includes("fetch failed");
+
+    if (transientInfraError) {
+      return NextResponse.json(
+        {
+          ok: true,
+          accepted: true,
+          transientInfraError: true,
+          error: message,
+        },
+        { status: 202 }
+      );
+    }
+
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

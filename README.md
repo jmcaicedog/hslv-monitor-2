@@ -165,6 +165,13 @@ Variables que debes configurar en Vercel:
 - `CRON_PENDING_QUOTA_SHARE` (opcional, recomendado: `0.7`)
 - `CRON_RATE_LIMIT_BREAK_THRESHOLD` (opcional, recomendado: `2`)
 - `CRON_ENABLE_RETRY` (opcional, recomendado: `false` para cron HTTP)
+- `CRON_HARD_RESPONSE_TIMEOUT_MS` (opcional, recomendado: `22000`)
+- `DB_CONNECTION_TIMEOUT_MS` (opcional, recomendado: `5000`)
+- `DB_QUERY_TIMEOUT_MS` (opcional, recomendado: `12000`)
+- `DB_IDLE_TIMEOUT_MS` (opcional, recomendado: `30000`)
+- `DB_POOL_MAX` (opcional, recomendado: `10`)
+- `DB_CONNECT_RETRIES` (opcional, recomendado: `2`)
+- `DB_CONNECT_RETRY_DELAY_MS` (opcional, recomendado: `250`)
 
 Recomendacion operativa para evitar `429` y completar datos en iteraciones:
 - Configura `CRON_MAX_CHANNELS_PER_RUN=4` inicialmente y sube a `6`/`8` solo si p95 se mantiene estable.
@@ -176,6 +183,8 @@ Observabilidad y concurrencia del cron:
 - La sincronizacion registra metricas por corrida en la tabla `sync_run_metrics`.
 - Si una corrida detecta otra sincronizacion activa (lock advisory), responde `202` con `lockSkipped=true` para evitar solapamiento.
 - Si Ubibot acumula respuestas `429` en una corrida, se activa circuit breaker y el resto de canales se difiere para el siguiente ciclo.
+- Si el endpoint se acerca al timeout externo del scheduler, responde `202` anticipadamente para evitar `Failed (timeout)`.
+- Si `feeds` devuelve `401` con `account_key`, la corrida cambia a modo summary-first para ese run y evita repetir fallos por permisos.
 
 ### Operacion sugerida
 

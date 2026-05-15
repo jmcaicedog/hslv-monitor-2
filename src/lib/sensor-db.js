@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 3;
+const SENSOR_SCHEMA_VERSION = 4;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -142,6 +142,8 @@ export async function ensureSensorSchema() {
           pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7,
           rate_limit_hits INTEGER NOT NULL DEFAULT 0,
           request_timeout_hits INTEGER NOT NULL DEFAULT 0,
+          feeds_permission_denied_hits INTEGER NOT NULL DEFAULT 0,
+          account_key_feeds_denied_mode BOOLEAN NOT NULL DEFAULT FALSE,
           circuit_broken BOOLEAN NOT NULL DEFAULT FALSE,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
@@ -160,6 +162,16 @@ export async function ensureSensorSchema() {
       await client.query(`
         ALTER TABLE sync_run_metrics
         ADD COLUMN IF NOT EXISTS request_timeout_hits INTEGER NOT NULL DEFAULT 0;
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS feeds_permission_denied_hits INTEGER NOT NULL DEFAULT 0;
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS account_key_feeds_denied_mode BOOLEAN NOT NULL DEFAULT FALSE;
       `);
 
       await client.query(`
