@@ -53,19 +53,33 @@ export async function GET(request) {
     const timeBudgetMs =
       Number.isFinite(softTimeoutFromEnv) && softTimeoutFromEnv >= 5000
         ? Math.floor(softTimeoutFromEnv)
-        : 18000;
+        : 15000;
 
     const requestTimeoutFromEnv = Number(process.env.UBIBOT_SYNC_REQUEST_TIMEOUT_MS);
     const requestTimeoutMs =
       Number.isFinite(requestTimeoutFromEnv) && requestTimeoutFromEnv >= 1000
         ? Math.floor(requestTimeoutFromEnv)
-        : 4500;
+        : 3500;
 
     const cronFeedsLimitFromEnv = Number(process.env.CRON_FEEDS_RESULTS_LIMIT);
     const feedsResultsLimit =
       Number.isFinite(cronFeedsLimitFromEnv) && cronFeedsLimitFromEnv > 0
         ? Math.floor(cronFeedsLimitFromEnv)
-        : 288;
+        : 144;
+
+    const pendingQuotaShareFromEnv = Number(process.env.CRON_PENDING_QUOTA_SHARE);
+    const pendingQuotaShare =
+      Number.isFinite(pendingQuotaShareFromEnv) &&
+      pendingQuotaShareFromEnv >= 0 &&
+      pendingQuotaShareFromEnv <= 1
+        ? pendingQuotaShareFromEnv
+        : 0.7;
+
+    const rateLimitBreakThresholdFromEnv = Number(process.env.CRON_RATE_LIMIT_BREAK_THRESHOLD);
+    const rateLimitBreakThreshold =
+      Number.isFinite(rateLimitBreakThresholdFromEnv) && rateLimitBreakThresholdFromEnv >= 1
+        ? Math.floor(rateLimitBreakThresholdFromEnv)
+        : 2;
 
     const cronRetryFlag = (process.env.CRON_ENABLE_RETRY || "false").trim().toLowerCase();
     const enableRetry = cronRetryFlag === "1" || cronRetryFlag === "true";
@@ -75,8 +89,11 @@ export async function GET(request) {
       timeBudgetMs,
       requestTimeoutMs,
       feedsResultsLimit,
+      pendingQuotaShare,
+      rateLimitBreakThreshold,
       enableRetry,
       skipSeriesOnLowBudget: true,
+      skipSummaryFallbackOnFeedFailure: true,
     });
 
     if (result.lockSkipped) {

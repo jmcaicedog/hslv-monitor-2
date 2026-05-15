@@ -97,8 +97,32 @@ export async function ensureSensorSchema() {
       feeds_results_limit INTEGER NOT NULL,
       stopped_due_to_time_budget BOOLEAN NOT NULL DEFAULT FALSE,
       lock_skipped BOOLEAN NOT NULL DEFAULT FALSE,
+      pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+      rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+      request_timeout_hits INTEGER NOT NULL DEFAULT 0,
+      circuit_broken BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await query(`
+    ALTER TABLE sync_run_metrics
+    ADD COLUMN IF NOT EXISTS pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7;
+  `);
+
+  await query(`
+    ALTER TABLE sync_run_metrics
+    ADD COLUMN IF NOT EXISTS rate_limit_hits INTEGER NOT NULL DEFAULT 0;
+  `);
+
+  await query(`
+    ALTER TABLE sync_run_metrics
+    ADD COLUMN IF NOT EXISTS request_timeout_hits INTEGER NOT NULL DEFAULT 0;
+  `);
+
+  await query(`
+    ALTER TABLE sync_run_metrics
+    ADD COLUMN IF NOT EXISTS circuit_broken BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
   await query(`

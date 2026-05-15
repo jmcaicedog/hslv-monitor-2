@@ -16,6 +16,7 @@ const SYNC_CURSOR_STATE_KEY = "channel_cursor";
 const MAX_PENDING_ATTEMPTS = 30;
 const SYNC_LOCK_KEY_A = 240513;
 const SYNC_LOCK_KEY_B = 99871;
+const DEFAULT_PENDING_QUOTA_SHARE = 0.7;
 
 function parsePositiveInt(raw, fallback = 0) {
   const parsed = Number(raw);
@@ -390,6 +391,43 @@ function rotateChannels(channels, startIndex) {
   return channels.slice(normalizedStart).concat(channels.slice(0, normalizedStart));
 }
 
+function clamp01(value, fallback = DEFAULT_PENDING_QUOTA_SHARE) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < 0) return 0;
+  if (parsed > 1) return 1;
+  return parsed;
+}
+
+function buildEffectiveChannels({ pendingChannels, baseChannels, maxChannelsPerRun, pendingQuotaShare }) {
+  if (maxChannelsPerRun <= 0) {
+    return [...pendingChannels, ...baseChannels];
+  }
+
+  const max = Math.max(0, maxChannelsPerRun);
+  const desiredPending = Math.min(pendingChannels.length, Math.round(max * pendingQuotaShare));
+  const desiredBase = Math.min(baseChannels.length, max - desiredPending);
+
+  const selected = [
+    ...pendingChannels.slice(0, desiredPending),
+    ...baseChannels.slice(0, desiredBase),
+  ];
+
+  let remaining = max - selected.length;
+  if (remaining > 0) {
+    const extraPending = pendingChannels.slice(desiredPending, desiredPending + remaining);
+    selected.push(...extraPending);
+    remaining = max - selected.length;
+  }
+
+  if (remaining > 0) {
+    const extraBase = baseChannels.slice(desiredBase, desiredBase + remaining);
+    selected.push(...extraBase);
+  }
+
+  return selected;
+}
+
 async function clearPendingSensor(sensorId) {
   await query(`DELETE FROM sync_pending_sensors WHERE sensor_id = $1;`, [sensorId]);
 }
@@ -416,6 +454,20 @@ async function deferPendingSensor(sensorId, reason = "deferred_time_budget") {
     `,
     [sensorId, String(reason)]
   );
+}
+
+async function deferRemainingChannels(channels, startIndex, reason) {
+  let deferred = 0;
+
+  for (let i = startIndex; i < channels.length; i += 1) {
+    const sensorId = Number(channels[i]?.channel_id);
+    if (!Number.isFinite(sensorId)) continue;
+
+    await deferPendingSensor(sensorId, reason);
+    deferred += 1;
+  }
+
+  return deferred;
 }
 
 async function markPendingSensorFailure(sensorId, reason) {
@@ -490,11 +542,16 @@ async function persistSyncRunMetrics(metrics) {
         time_budget_ms,
         feeds_results_limit,
         stopped_due_to_time_budget,
-        lock_skipped
+        lock_skipped,
+        pending_quota_share,
+        rate_limit_hits,
+        request_timeout_hits,
+        circuit_broken
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13, $14, $15
+        $8, $9, $10, $11, $12, $13, $14, $15,
+        $16, $17, $18, $19
       )
       ON CONFLICT (run_id)
       DO UPDATE SET
@@ -511,7 +568,11 @@ async function persistSyncRunMetrics(metrics) {
         time_budget_ms = EXCLUDED.time_budget_ms,
         feeds_results_limit = EXCLUDED.feeds_results_limit,
         stopped_due_to_time_budget = EXCLUDED.stopped_due_to_time_budget,
-        lock_skipped = EXCLUDED.lock_skipped;
+        lock_skipped = EXCLUDED.lock_skipped,
+        pending_quota_share = EXCLUDED.pending_quota_share,
+        rate_limit_hits = EXCLUDED.rate_limit_hits,
+        request_timeout_hits = EXCLUDED.request_timeout_hits,
+        circuit_broken = EXCLUDED.circuit_broken;
     `,
     [
       metrics.runId,
@@ -529,6 +590,10 @@ async function persistSyncRunMetrics(metrics) {
       metrics.feedsResultsLimit,
       metrics.stoppedDueToTimeBudget,
       metrics.lockSkipped,
+      metrics.pendingQuotaShare,
+      metrics.rateLimitHits,
+      metrics.requestTimeoutHits,
+      metrics.circuitBroken,
     ]
   );
 }
@@ -552,6 +617,20 @@ async function runUbiBotSyncUnlocked(options = {}) {
     options.feedsResultsLimit,
     FEEDS_RESULTS_LIMIT
   );
+  const pendingQuotaShare = clamp01(
+    options.pendingQuotaShare,
+    clamp01(process.env.CRON_PENDING_QUOTA_SHARE, DEFAULT_PENDING_QUOTA_SHARE)
+  );
+  const rateLimitBreakThreshold = parsePositiveInt(
+    options.rateLimitBreakThreshold,
+    parsePositiveInt(process.env.CRON_RATE_LIMIT_BREAK_THRESHOLD, 2)
+  );
+  const minChannelBudgetMs = parsePositiveInt(
+    options.minChannelBudgetMs,
+    Math.max(2500, requestTimeoutMs + 1800)
+  );
+  const skipSummaryFallbackOnFeedFailure =
+    options.skipSummaryFallbackOnFeedFailure === true;
   const enableRetry =
     typeof options.enableRetry === "boolean" ? options.enableRetry : UBIBOT_ENABLE_RETRY;
   const skipSeriesOnLowBudget = options.skipSeriesOnLowBudget === true;
@@ -607,7 +686,7 @@ async function runUbiBotSyncUnlocked(options = {}) {
     ? rotateChannels(sortedBaseChannels, baseCursor)
     : sortedBaseChannels;
 
-  const channelsToProcess = [];
+  const pendingChannelsToProcess = [];
   const seenIds = new Set();
 
   for (const pendingId of duePendingSensorIds) {
@@ -615,21 +694,24 @@ async function runUbiBotSyncUnlocked(options = {}) {
     if (!pendingChannel) continue;
     const channelId = Number(pendingChannel.channel_id);
     if (!Number.isFinite(channelId) || seenIds.has(channelId)) continue;
-    channelsToProcess.push(pendingChannel);
+    pendingChannelsToProcess.push(pendingChannel);
     seenIds.add(channelId);
   }
 
+  const baseChannelsToProcess = [];
   for (const channel of rotatedBaseChannels) {
     const channelId = Number(channel.channel_id);
     if (!Number.isFinite(channelId) || seenIds.has(channelId)) continue;
-    channelsToProcess.push(channel);
+    baseChannelsToProcess.push(channel);
     seenIds.add(channelId);
   }
 
-  const effectiveChannelsToProcess =
-    maxChannelsPerRun > 0
-      ? channelsToProcess.slice(0, maxChannelsPerRun)
-      : channelsToProcess;
+  const effectiveChannelsToProcess = buildEffectiveChannels({
+    pendingChannels: pendingChannelsToProcess,
+    baseChannels: baseChannelsToProcess,
+    maxChannelsPerRun,
+    pendingQuotaShare,
+  });
 
   const retriedFromPending = effectiveChannelsToProcess.reduce((count, channel) => {
     const sensorId = Number(channel.channel_id);
@@ -645,26 +727,20 @@ async function runUbiBotSyncUnlocked(options = {}) {
   let stoppedDueToTimeBudget = false;
   let deferredSeriesChannels = 0;
   let deferredUnprocessedChannels = 0;
+  let rateLimitHits = 0;
+  let requestTimeoutHits = 0;
+  let circuitBroken = false;
 
   for (let channelIndex = 0; channelIndex < effectiveChannelsToProcess.length; channelIndex += 1) {
     const channel = effectiveChannelsToProcess[channelIndex];
 
-    if (getRemainingMs(deadlineAt) <= 1200) {
+    if (getRemainingMs(deadlineAt) <= minChannelBudgetMs) {
       stoppedDueToTimeBudget = true;
-
-      for (
-        let pendingIndex = channelIndex;
-        pendingIndex < effectiveChannelsToProcess.length;
-        pendingIndex += 1
-      ) {
-        const pendingChannel = effectiveChannelsToProcess[pendingIndex];
-        const pendingSensorId = Number(pendingChannel?.channel_id);
-
-        if (!Number.isFinite(pendingSensorId)) continue;
-
-        await deferPendingSensor(pendingSensorId, "deferred_run_deadline");
-        deferredUnprocessedChannels += 1;
-      }
+      deferredUnprocessedChannels += await deferRemainingChannels(
+        effectiveChannelsToProcess,
+        channelIndex,
+        "deferred_run_deadline"
+      );
 
       break;
     }
@@ -758,6 +834,35 @@ async function runUbiBotSyncUnlocked(options = {}) {
         deadlineAt,
       });
 
+      if (!feedsPayload.ok) {
+        if (feedsPayload.status === 429) {
+          rateLimitHits += 1;
+        }
+
+        if (feedsPayload.status === 408) {
+          requestTimeoutHits += 1;
+        }
+      }
+
+      if (rateLimitHits >= rateLimitBreakThreshold) {
+        circuitBroken = true;
+        await markPendingSensorFailure(sensorId, "feeds_rate_limit_break");
+        failedChannels += 1;
+        failedSensorIds.push(sensorId);
+
+        if (!duePendingSet.has(sensorId)) {
+          processedBaseChannels += 1;
+        }
+
+        deferredUnprocessedChannels += await deferRemainingChannels(
+          effectiveChannelsToProcess,
+          channelIndex + 1,
+          "deferred_rate_limit_circuit_break"
+        );
+
+        break;
+      }
+
       let readings = [];
       let sourceForSeries = "api_summary";
       let seriesFetchSucceeded = false;
@@ -767,6 +872,26 @@ async function runUbiBotSyncUnlocked(options = {}) {
         sourceForSeries = feedsPayload.source || "api_feed";
         seriesFetchSucceeded = true;
       } else {
+        if (skipSummaryFallbackOnFeedFailure && feedsPayload.status > 0) {
+          failedChannels += 1;
+          failedSensorIds.push(sensorId);
+          await markPendingSensorFailure(sensorId, `feeds_status_${feedsPayload.status}`);
+          if (!duePendingSet.has(sensorId)) {
+            processedBaseChannels += 1;
+          }
+          continue;
+        }
+
+        if (Number.isFinite(deadlineAt) && getRemainingMs(deadlineAt) <= requestTimeoutMs + 900) {
+          deferredSeriesChannels += 1;
+          await deferPendingSensor(sensorId, "deferred_before_summary_low_budget");
+          syncedChannels += 1;
+          if (!duePendingSet.has(sensorId)) {
+            processedBaseChannels += 1;
+          }
+          continue;
+        }
+
         const summaryResult = await fetchJsonWithRetry(
           `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
           {
@@ -776,6 +901,14 @@ async function runUbiBotSyncUnlocked(options = {}) {
             deadlineAt,
           }
         );
+
+        if (!summaryResult.ok && summaryResult.status === 429) {
+          rateLimitHits += 1;
+        }
+
+        if (!summaryResult.ok && summaryResult.status === 408) {
+          requestTimeoutHits += 1;
+        }
 
         if (!summaryResult.ok) {
           failedChannels += 1;
@@ -839,6 +972,10 @@ async function runUbiBotSyncUnlocked(options = {}) {
     duePendingTotal: duePendingSensorIds.length,
     deferredSeriesChannels,
     deferredUnprocessedChannels,
+    pendingQuotaShare,
+    rateLimitHits,
+    requestTimeoutHits,
+    circuitBroken,
     stoppedDueToTimeBudget,
     elapsedMs,
     timeBudgetMs: Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
@@ -863,6 +1000,10 @@ async function runUbiBotSyncUnlocked(options = {}) {
     feedsResultsLimit: result.feedsResultsLimit,
     stoppedDueToTimeBudget: result.stoppedDueToTimeBudget,
     lockSkipped: result.lockSkipped,
+    pendingQuotaShare: result.pendingQuotaShare,
+    rateLimitHits: result.rateLimitHits,
+    requestTimeoutHits: result.requestTimeoutHits,
+    circuitBroken: result.circuitBroken,
   });
 
   return result;
@@ -894,6 +1035,13 @@ export async function runUbiBotSync(options = {}) {
     elapsedMs: 0,
     timeBudgetMs: null,
     feedsResultsLimit: parsePositiveInt(options.feedsResultsLimit, FEEDS_RESULTS_LIMIT),
+    pendingQuotaShare: clamp01(
+      options.pendingQuotaShare,
+      clamp01(process.env.CRON_PENDING_QUOTA_SHARE, DEFAULT_PENDING_QUOTA_SHARE)
+    ),
+    rateLimitHits: 0,
+    requestTimeoutHits: 0,
+    circuitBroken: false,
     totalInserted: 0,
     lockSkipped: true,
   };
@@ -914,6 +1062,10 @@ export async function runUbiBotSync(options = {}) {
     feedsResultsLimit: lockSkippedResult.feedsResultsLimit,
     stoppedDueToTimeBudget: lockSkippedResult.stoppedDueToTimeBudget,
     lockSkipped: lockSkippedResult.lockSkipped,
+    pendingQuotaShare: lockSkippedResult.pendingQuotaShare,
+    rateLimitHits: lockSkippedResult.rateLimitHits,
+    requestTimeoutHits: lockSkippedResult.requestTimeoutHits,
+    circuitBroken: lockSkippedResult.circuitBroken,
   });
 
   return lockSkippedResult;

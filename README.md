@@ -159,9 +159,11 @@ Variables que debes configurar en Vercel:
 - `CRON_SECRET`
 - `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `10`)
 - `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional, recomendado inicial: `2016`)
-- `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `18000`)
-- `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `4500`)
-- `CRON_FEEDS_RESULTS_LIMIT` (opcional, recomendado: `288`)
+- `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `15000`)
+- `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `3500`)
+- `CRON_FEEDS_RESULTS_LIMIT` (opcional, recomendado: `144`)
+- `CRON_PENDING_QUOTA_SHARE` (opcional, recomendado: `0.7`)
+- `CRON_RATE_LIMIT_BREAK_THRESHOLD` (opcional, recomendado: `2`)
 - `CRON_ENABLE_RETRY` (opcional, recomendado: `false` para cron HTTP)
 
 Recomendacion operativa para evitar `429` y completar datos en iteraciones:
@@ -173,6 +175,7 @@ Recomendacion operativa para evitar `429` y completar datos en iteraciones:
 Observabilidad y concurrencia del cron:
 - La sincronizacion registra metricas por corrida en la tabla `sync_run_metrics`.
 - Si una corrida detecta otra sincronizacion activa (lock advisory), responde `202` con `lockSkipped=true` para evitar solapamiento.
+- Si Ubibot acumula respuestas `429` en una corrida, se activa circuit breaker y el resto de canales se difiere para el siguiente ciclo.
 
 ### Operacion sugerida
 
