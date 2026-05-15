@@ -47,7 +47,7 @@ export async function GET(request) {
     const maxChannelsPerRun =
       Number.isFinite(maxChannelsFromEnv) && maxChannelsFromEnv > 0
         ? Math.floor(maxChannelsFromEnv)
-        : 10;
+        : 4;
 
     const softTimeoutFromEnv = Number(process.env.CRON_SOFT_TIMEOUT_MS);
     const timeBudgetMs =

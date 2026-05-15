@@ -1,7 +1,11 @@
-import { query } from "./db.js";
+import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
+const SENSOR_SCHEMA_VERSION = 3;
+const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
+const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
+const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
 
 function parsePayloadMetric(payload, key) {
   const raw = payload?.[key]?.value ?? payload?.[key] ?? null;
@@ -25,54 +29,6 @@ export async function ensureSensorSchema() {
   }
 
   await query(`
-    CREATE TABLE IF NOT EXISTS sensors (
-      id BIGINT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      status INTEGER,
-      last_payload JSONB,
-      last_seen_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS sensor_readings (
-      sensor_id BIGINT NOT NULL REFERENCES sensors(id) ON DELETE CASCADE,
-      observed_at TIMESTAMPTZ NOT NULL,
-      temperatura DOUBLE PRECISION,
-      humedad DOUBLE PRECISION,
-      voltaje DOUBLE PRECISION,
-      presion DOUBLE PRECISION,
-      luz DOUBLE PRECISION,
-      source TEXT NOT NULL DEFAULT 'api',
-      inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (sensor_id, observed_at)
-    );
-  `);
-
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_sensor_readings_sensor_time
-      ON sensor_readings(sensor_id, observed_at DESC);
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS sync_pending_sensors (
-      sensor_id BIGINT PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_sync_pending_sensors_next_retry
-      ON sync_pending_sensors(next_retry_at ASC);
-  `);
-
-  await query(`
     CREATE TABLE IF NOT EXISTS sync_runtime_state (
       state_key TEXT PRIMARY KEY,
       cursor INTEGER NOT NULL DEFAULT 0,
@@ -80,55 +36,160 @@ export async function ensureSensorSchema() {
     );
   `);
 
-  await query(`
-    CREATE TABLE IF NOT EXISTS sync_run_metrics (
-      run_id TEXT PRIMARY KEY,
-      attempted_channels INTEGER NOT NULL,
-      processed_channels INTEGER NOT NULL,
-      synced_channels INTEGER NOT NULL,
-      failed_channels INTEGER NOT NULL,
-      deferred_series_channels INTEGER NOT NULL,
-      deferred_unprocessed_channels INTEGER NOT NULL DEFAULT 0,
-      pending_retries INTEGER NOT NULL,
-      retried_from_pending INTEGER NOT NULL,
-      due_pending_total INTEGER NOT NULL,
-      elapsed_ms INTEGER NOT NULL,
-      time_budget_ms INTEGER,
-      feeds_results_limit INTEGER NOT NULL,
-      stopped_due_to_time_budget BOOLEAN NOT NULL DEFAULT FALSE,
-      lock_skipped BOOLEAN NOT NULL DEFAULT FALSE,
-      pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7,
-      rate_limit_hits INTEGER NOT NULL DEFAULT 0,
-      request_timeout_hits INTEGER NOT NULL DEFAULT 0,
-      circuit_broken BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
+  const versionRows = await query(
+    `
+      SELECT cursor
+      FROM sync_runtime_state
+      WHERE state_key = $1
+      LIMIT 1;
+    `,
+    [SENSOR_SCHEMA_STATE_KEY]
+  );
 
-  await query(`
-    ALTER TABLE sync_run_metrics
-    ADD COLUMN IF NOT EXISTS pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7;
-  `);
+  const currentVersion = Number(versionRows.rows?.[0]?.cursor || 0);
+  if (currentVersion >= SENSOR_SCHEMA_VERSION) {
+    schemaEnsured = true;
+    return;
+  }
 
-  await query(`
-    ALTER TABLE sync_run_metrics
-    ADD COLUMN IF NOT EXISTS rate_limit_hits INTEGER NOT NULL DEFAULT 0;
-  `);
+  await withDbClient(async (client) => {
+    await client.query(`SELECT pg_advisory_lock($1::integer, $2::integer);`, [
+      SENSOR_SCHEMA_LOCK_KEY_A,
+      SENSOR_SCHEMA_LOCK_KEY_B,
+    ]);
 
-  await query(`
-    ALTER TABLE sync_run_metrics
-    ADD COLUMN IF NOT EXISTS request_timeout_hits INTEGER NOT NULL DEFAULT 0;
-  `);
+    try {
+      const lockedVersionRows = await client.query(
+        `
+          SELECT cursor
+          FROM sync_runtime_state
+          WHERE state_key = $1
+          LIMIT 1;
+        `,
+        [SENSOR_SCHEMA_STATE_KEY]
+      );
 
-  await query(`
-    ALTER TABLE sync_run_metrics
-    ADD COLUMN IF NOT EXISTS circuit_broken BOOLEAN NOT NULL DEFAULT FALSE;
-  `);
+      const lockedVersion = Number(lockedVersionRows.rows?.[0]?.cursor || 0);
+      if (lockedVersion >= SENSOR_SCHEMA_VERSION) {
+        return;
+      }
 
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_sync_run_metrics_created_at
-      ON sync_run_metrics(created_at DESC);
-  `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sensors (
+          id BIGINT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT,
+          status INTEGER,
+          last_payload JSONB,
+          last_seen_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sensor_readings (
+          sensor_id BIGINT NOT NULL REFERENCES sensors(id) ON DELETE CASCADE,
+          observed_at TIMESTAMPTZ NOT NULL,
+          temperatura DOUBLE PRECISION,
+          humedad DOUBLE PRECISION,
+          voltaje DOUBLE PRECISION,
+          presion DOUBLE PRECISION,
+          luz DOUBLE PRECISION,
+          source TEXT NOT NULL DEFAULT 'api',
+          inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (sensor_id, observed_at)
+        );
+      `);
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_sensor_readings_sensor_time
+          ON sensor_readings(sensor_id, observed_at DESC);
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sync_pending_sensors (
+          sensor_id BIGINT PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_sync_pending_sensors_next_retry
+          ON sync_pending_sensors(next_retry_at ASC);
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sync_run_metrics (
+          run_id TEXT PRIMARY KEY,
+          attempted_channels INTEGER NOT NULL,
+          processed_channels INTEGER NOT NULL,
+          synced_channels INTEGER NOT NULL,
+          failed_channels INTEGER NOT NULL,
+          deferred_series_channels INTEGER NOT NULL,
+          deferred_unprocessed_channels INTEGER NOT NULL DEFAULT 0,
+          pending_retries INTEGER NOT NULL,
+          retried_from_pending INTEGER NOT NULL,
+          due_pending_total INTEGER NOT NULL,
+          elapsed_ms INTEGER NOT NULL,
+          time_budget_ms INTEGER,
+          feeds_results_limit INTEGER NOT NULL,
+          stopped_due_to_time_budget BOOLEAN NOT NULL DEFAULT FALSE,
+          lock_skipped BOOLEAN NOT NULL DEFAULT FALSE,
+          pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+          rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+          request_timeout_hits INTEGER NOT NULL DEFAULT 0,
+          circuit_broken BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS pending_quota_share DOUBLE PRECISION NOT NULL DEFAULT 0.7;
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS rate_limit_hits INTEGER NOT NULL DEFAULT 0;
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS request_timeout_hits INTEGER NOT NULL DEFAULT 0;
+      `);
+
+      await client.query(`
+        ALTER TABLE sync_run_metrics
+        ADD COLUMN IF NOT EXISTS circuit_broken BOOLEAN NOT NULL DEFAULT FALSE;
+      `);
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_sync_run_metrics_created_at
+          ON sync_run_metrics(created_at DESC);
+      `);
+
+      await client.query(
+        `
+          INSERT INTO sync_runtime_state (state_key, cursor, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (state_key)
+          DO UPDATE SET
+            cursor = EXCLUDED.cursor,
+            updated_at = NOW();
+        `,
+        [SENSOR_SCHEMA_STATE_KEY, SENSOR_SCHEMA_VERSION]
+      );
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock($1::integer, $2::integer);`, [
+        SENSOR_SCHEMA_LOCK_KEY_A,
+        SENSOR_SCHEMA_LOCK_KEY_B,
+      ]);
+    }
+  });
 
   schemaEnsured = true;
 }

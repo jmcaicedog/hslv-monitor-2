@@ -157,7 +157,7 @@ Variables que debes configurar en Vercel:
 - `UBIBOT_ACCOUNT_KEY`
 - `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
 - `CRON_SECRET`
-- `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `10`)
+- `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `4` durante estabilizacion; luego subir gradualmente)
 - `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional, recomendado inicial: `2016`)
 - `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `15000`)
 - `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `3500`)
@@ -167,7 +167,7 @@ Variables que debes configurar en Vercel:
 - `CRON_ENABLE_RETRY` (opcional, recomendado: `false` para cron HTTP)
 
 Recomendacion operativa para evitar `429` y completar datos en iteraciones:
-- Configura `CRON_MAX_CHANNELS_PER_RUN=10` (o 12 maximo).
+- Configura `CRON_MAX_CHANNELS_PER_RUN=4` inicialmente y sube a `6`/`8` solo si p95 se mantiene estable.
 - Programa el cron cada 10 minutos.
 - El sistema prioriza sensores pendientes de corrida anterior y los reintenta automaticamente.
 - Con limite por corrida activo, los canales se procesan en rotacion entre ejecuciones para evitar que siempre se sincronicen los mismos primeros sensores.
