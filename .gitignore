@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# documentación local (no versionar evidencias)
+docs/MANUAL_USUARIO.md
+docs/MANUAL_USUARIO.pdf
+docs/screenshoots/

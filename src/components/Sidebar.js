@@ -14,7 +14,7 @@ export default function Sidebar({ locations, onSelectLocation }) {
         ☰
       </button>
       <aside
-        className={`fixed inset-0 bg-gray-800 text-white p-4 transition-transform transform ${
+        className={`fixed inset-0 z-40 bg-gray-800 text-white p-4 transition-transform transform ${
           isOpen ? "translate-x-0" : "-translate-x-full"
         } lg:relative lg:w-64 lg:translate-x-0`}
       >
