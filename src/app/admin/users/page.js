@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Eye, EyeOff, Home } from "lucide-react";
 import {
@@ -25,7 +25,7 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState("user");
   const [saving, setSaving] = useState(false);
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     const userResponse = await fetchCurrentUser();
     const me = userResponse.user;
 
@@ -38,7 +38,7 @@ export default function AdminUsersPage() {
 
     const usersResponse = await fetchUsers();
     setUsers(usersResponse.users || []);
-  }
+  }, [router]);
 
   useEffect(() => {
     async function run() {
@@ -54,7 +54,7 @@ export default function AdminUsersPage() {
     }
 
     run();
-  }, [router]);
+  }, [loadUsers]);
 
   async function handleCreate(event) {
     event.preventDefault();
