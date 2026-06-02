@@ -91,7 +91,7 @@ export default function Home() {
     <Layout>
       <div className="flex">
         {/* Componente de menú lateral */}
-        <div className="w-0 lg:w-64 fixed h-full overflow-hidden bg-gray-800 text-white p-0 lg:p-4">
+        <div className="w-0 lg:w-64 fixed z-[90] h-full overflow-hidden bg-gray-800 text-white p-0 lg:p-4 lg:z-auto">
           {sensors.length > 0 ? (
             <Sidebar
               locations={uniqueLocations}

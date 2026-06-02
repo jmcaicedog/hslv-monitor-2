@@ -1,22 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 export default function Sidebar({ locations, onSelectLocation }) {
   const [isOpen, setIsOpen] = useState(false);
   const uniqueLocations = [...new Set(locations)];
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen]);
+
   return (
     <>
       <button
-        className={`fixed top-4 right-4 z-50 bg-gray-700 text-white px-4 py-2 rounded-md lg:hidden ${
+        className={`fixed top-4 right-4 z-[120] bg-gray-700 text-white px-4 py-2 rounded-md lg:hidden ${
           isOpen ? "hidden" : "block"
         }`}
         onClick={() => setIsOpen(true)}
       >
         ☰
       </button>
+      {isOpen ? (
+        <button
+          aria-label="Cerrar menú"
+          className="fixed inset-0 z-[100] bg-black/45 lg:hidden"
+          onClick={() => setIsOpen(false)}
+        />
+      ) : null}
+
       <aside
-        className={`fixed inset-0 z-40 bg-gray-800 text-white p-4 transition-transform transform ${
+        className={`fixed inset-y-0 left-0 z-[110] w-[min(22rem,92vw)] bg-gray-800 text-white p-4 transition-transform transform ${
           isOpen ? "translate-x-0" : "-translate-x-full"
-        } lg:relative lg:w-64 lg:translate-x-0`}
+        } lg:relative lg:inset-auto lg:left-auto lg:z-auto lg:w-64 lg:translate-x-0`}
       >
         <button
           className="absolute top-4 right-4 text-white text-2xl lg:hidden"
