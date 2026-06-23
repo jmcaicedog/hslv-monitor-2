@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 6;
+const SENSOR_SCHEMA_VERSION = 7;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -150,6 +150,28 @@ export async function ensureSensorSchema() {
           luz = sr.voltaje
         FROM sensors s
         WHERE s.id = sr.sensor_id
+          AND (
+            COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
+          ) ~* 'carro\\s*(de\\s*)?paro';
+      `);
+
+      // Carro de Paro no usa presion; limpia historico y valores de humedad2 invalidos.
+      await client.query(`
+        UPDATE sensor_readings sr
+        SET presion = NULL
+        FROM sensors s
+        WHERE s.id = sr.sensor_id
+          AND (
+            COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
+          ) ~* 'carro\\s*(de\\s*)?paro';
+      `);
+
+      await client.query(`
+        UPDATE sensor_readings sr
+        SET humedad_2 = NULL
+        FROM sensors s
+        WHERE s.id = sr.sensor_id
+          AND sr.humedad_2 < 0
           AND (
             COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
           ) ~* 'carro\\s*(de\\s*)?paro';
@@ -326,7 +348,9 @@ export async function getSensorsOverview() {
       voltage: isCarroDeParo
         ? parsePayloadMetricAny(payload, ["field6"]) ?? row.voltaje
         : parsePayloadMetricAny(payload, ["field3"]) ?? row.voltaje,
-      pressure: parsePayloadMetric(payload, "field9") ?? row.presion,
+      pressure: isCarroDeParo
+        ? null
+        : parsePayloadMetric(payload, "field9") ?? row.presion,
       light: isCarroDeParo
         ? parsePayloadMetricAny(payload, ["field3"]) ?? row.luz
         : parsePayloadMetricAny(payload, ["field6"]) ?? row.luz,
@@ -336,7 +360,7 @@ export async function getSensorsOverview() {
 
 export async function getSensorReadingsByRange({ sensorId, hours, month, startDate, endDate }) {
   const sensorMeta = await query(
-    `SELECT id, title FROM sensors WHERE id = $1 LIMIT 1;`,
+    `SELECT id, title, description FROM sensors WHERE id = $1 LIMIT 1;`,
     [sensorId]
   );
 
@@ -357,6 +381,10 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
 
   const firstObservedAt = boundsResult.rows[0]?.first_observed_at || null;
   const lastObservedAt = boundsResult.rows[0]?.last_observed_at || null;
+  const isCarroDeParo = isCarroDeParoSensor({
+    title: sensorMeta.rows[0].title,
+    description: sensorMeta.rows[0].description,
+  });
 
   let whereSql = "";
   let params = [sensorId];
@@ -488,7 +516,7 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
       temperatura2: row.temperatura_2,
       humedad2: row.humedad_2,
       voltaje: row.voltaje,
-      presion: row.presion,
+        presion: isCarroDeParo ? null : row.presion,
       luz: row.luz,
     })),
   };

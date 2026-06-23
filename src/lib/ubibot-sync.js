@@ -215,7 +215,7 @@ function mapFeedRecord(sensorId, feed, options = {}) {
     voltaje: isCarroDeParo
       ? parseNumber(feed.field6?.avg ?? feed.field6)
       : parseNumber(feed.field3?.avg ?? feed.field3),
-    presion: parseNumber(feed.field9?.avg ?? feed.field9),
+    presion: isCarroDeParo ? null : parseNumber(feed.field9?.avg ?? feed.field9),
     luz: isCarroDeParo
       ? parseNumber(feed.field3?.avg ?? feed.field3)
       : parseNumber(feed.field6?.avg ?? feed.field6),
@@ -863,7 +863,7 @@ async function runUbiBotSyncUnlocked(options = {}) {
               voltaje: isCarroDeParo
                 ? parseNumber(lastPayload.field6?.value)
                 : parseNumber(lastPayload.field3?.value),
-              presion: parseNumber(lastPayload.field9?.value),
+              presion: isCarroDeParo ? null : parseNumber(lastPayload.field9?.value),
               luz: isCarroDeParo
                 ? parseNumber(lastPayload.field3?.value)
                 : parseNumber(lastPayload.field6?.value),
