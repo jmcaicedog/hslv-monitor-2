@@ -1,18 +1,24 @@
 import {
   FaTemperatureHigh,
-  FaThermometerHalf,
   FaTint,
-  FaWater,
   FaBolt,
   FaCompressArrowsAlt,
   FaSun,
-  FaWaveSquare,
   FaCircle,
   FaExclamationTriangle,
   FaPowerOff,
 } from "react-icons/fa";
 import Link from "next/link";
 import { memo, useMemo } from "react";
+import {
+  Cable,
+  Droplet,
+  Droplets,
+  Gauge,
+  Sun as SunIcon,
+  Thermometer,
+  Zap,
+} from "lucide-react";
 
 function Card({
   id,
@@ -38,22 +44,28 @@ function Card({
     const allMetrics = [
       {
         key: "temperature",
-        icon: <FaTemperatureHigh className="text-red-500 text-xl" />,
+        icon: <Thermometer className="h-5 w-5 text-lime-500" strokeWidth={2.2} />,
         value: temperature,
         unit: "°C",
       },
       {
         key: "humidity",
-        icon: <FaTint className="text-red-600 text-xl" />,
+        icon: (
+          <Droplet
+            className="h-5 w-5 text-red-600"
+            fill="currentColor"
+            strokeWidth={1.8}
+          />
+        ),
         value: humidity,
         unit: "%",
       },
       {
         key: "temperature_secondary",
         icon: (
-          <span className="relative inline-flex items-center justify-center">
-            <FaThermometerHalf className="text-green-500 text-xl" />
-            <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          <span className="relative inline-flex items-center justify-center" aria-hidden="true">
+            <Thermometer className="h-5 w-5 text-lime-500" strokeWidth={2.2} />
+            <Cable className="absolute -right-2 -bottom-1 h-3 w-3 text-gray-500" strokeWidth={2.2} />
           </span>
         ),
         value: temperatureSecondary,
@@ -62,9 +74,9 @@ function Card({
       {
         key: "humidity_secondary",
         icon: (
-          <span className="relative inline-flex items-center justify-center">
-            <FaWater className="text-amber-500 text-xl" />
-            <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          <span className="relative inline-flex items-center justify-center" aria-hidden="true">
+            <Droplets className="h-5 w-5 text-amber-500" strokeWidth={2.1} />
+            <Cable className="absolute -right-2 -bottom-1 h-3 w-3 text-amber-500" strokeWidth={2.2} />
           </span>
         ),
         value: humiditySecondary,
@@ -72,27 +84,25 @@ function Card({
       },
       {
         key: "voltage",
-        icon: <FaBolt className="text-yellow-500 text-xl" />,
+        icon: <Zap className="h-5 w-5 text-lime-500" strokeWidth={2.5} />,
         value: voltage,
         unit: "V",
       },
       {
         key: "pressure",
-        icon: <FaCompressArrowsAlt className="text-green-500 text-xl" />,
+        icon: <Gauge className="h-5 w-5 text-green-500" strokeWidth={2.2} />,
         value: pressure,
         unit: "KPa",
       },
       {
         key: "light",
-        icon: <FaSun className="text-yellow-400 text-xl" />,
+        icon: <SunIcon className="h-5 w-5 text-yellow-500" strokeWidth={2.1} />,
         value: light,
         unit: "lx",
       },
     ];
 
-    return allMetrics.filter(
-      (metric) => Number.isFinite(metric.value) && metric.value !== 0
-    );
+    return allMetrics.filter((metric) => Number.isFinite(metric.value) && metric.value !== 0);
   }, [
     humidity,
     humiditySecondary,
@@ -145,9 +155,7 @@ function Card({
       new Set(activeAlarmMetrics.map((item) => item?.metricKey).filter(Boolean))
     );
 
-    const resolved = uniqueKeys
-      .map((metricKey) => iconMap[metricKey])
-      .filter(Boolean);
+    const resolved = uniqueKeys.map((metricKey) => iconMap[metricKey]).filter(Boolean);
 
     if (resolved.length > 0) {
       return resolved;
