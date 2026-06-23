@@ -1,9 +1,12 @@
 import {
   FaTemperatureHigh,
+  FaThermometerHalf,
   FaTint,
+  FaWater,
   FaBolt,
   FaCompressArrowsAlt,
-  FaLightbulb,
+  FaSun,
+  FaWaveSquare,
   FaCircle,
   FaExclamationTriangle,
   FaPowerOff,
@@ -32,37 +35,40 @@ function Card({
   }, [createdAt]);
 
   const metrics = useMemo(() => {
-    const hasSecondaryClimateMetrics =
-      Number.isFinite(temperatureSecondary) || Number.isFinite(humiditySecondary);
-
     const allMetrics = [
       {
         key: "temperature",
         icon: <FaTemperatureHigh className="text-red-500 text-xl" />,
         value: temperature,
         unit: "°C",
-        badge: hasSecondaryClimateMetrics ? "T1" : null,
       },
       {
         key: "humidity",
-        icon: <FaTint className="text-blue-500 text-xl" />,
+        icon: <FaTint className="text-red-600 text-xl" />,
         value: humidity,
         unit: "%",
-        badge: hasSecondaryClimateMetrics ? "H1" : null,
       },
       {
         key: "temperature_secondary",
-        icon: <FaTemperatureHigh className="text-red-500 text-xl" />,
+        icon: (
+          <span className="relative inline-flex items-center justify-center">
+            <FaThermometerHalf className="text-green-500 text-xl" />
+            <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          </span>
+        ),
         value: temperatureSecondary,
         unit: "°C",
-        badge: "T2",
       },
       {
         key: "humidity_secondary",
-        icon: <FaTint className="text-blue-500 text-xl" />,
+        icon: (
+          <span className="relative inline-flex items-center justify-center">
+            <FaWater className="text-amber-500 text-xl" />
+            <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          </span>
+        ),
         value: humiditySecondary,
         unit: "%",
-        badge: "H2",
       },
       {
         key: "voltage",
@@ -78,7 +84,7 @@ function Card({
       },
       {
         key: "light",
-        icon: <FaLightbulb className="text-yellow-400 text-xl" />,
+        icon: <FaSun className="text-yellow-400 text-xl" />,
         value: light,
         unit: "lx",
       },
@@ -126,7 +132,7 @@ function Card({
       light: {
         key: "light",
         label: "Luz en alarma",
-        icon: <FaLightbulb className="text-red-600 text-sm" />,
+        icon: <FaSun className="text-red-600 text-sm" />,
       },
       inactive: {
         key: "inactive",
@@ -185,11 +191,6 @@ function Card({
             metrics.map((metric) => (
               <div key={metric.key} className="flex flex-col items-center">
                 {metric.icon}
-                {metric.badge ? (
-                  <span className="text-[10px] font-semibold leading-none text-gray-500 mb-0.5">
-                    {metric.badge}
-                  </span>
-                ) : null}
                 <p className="text-sm">{metric.value.toFixed(2)} {metric.unit}</p>
               </div>
             ))

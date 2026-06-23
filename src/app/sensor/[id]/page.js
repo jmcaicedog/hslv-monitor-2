@@ -2,7 +2,19 @@
 import { attendSensorAlarm, fetchSensorAlarmState, fetchSensorReadings } from "@/utils/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FaTimes, FaFileCsv, FaFilePdf } from "react-icons/fa";
+import {
+  FaTimes,
+  FaFileCsv,
+  FaFilePdf,
+  FaTemperatureHigh,
+  FaThermometerHalf,
+  FaTint,
+  FaWater,
+  FaBolt,
+  FaSun,
+  FaCompressArrowsAlt,
+  FaWaveSquare,
+} from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { useParams } from "next/navigation";
@@ -50,6 +62,37 @@ const metricLabelMap = {
 
 function getMetricLabel(metricKey) {
   return metricLabelMap[metricKey] || metricKey.charAt(0).toUpperCase() + metricKey.slice(1);
+}
+
+function getMetricIcon(metricKey) {
+  switch (metricKey) {
+    case "temperatura":
+      return <FaTemperatureHigh className="text-red-500" aria-hidden="true" />;
+    case "humedad":
+      return <FaTint className="text-red-600" aria-hidden="true" />;
+    case "temperatura2":
+      return (
+        <span className="relative inline-flex items-center justify-center" aria-hidden="true">
+          <FaThermometerHalf className="text-green-500" />
+          <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+        </span>
+      );
+    case "humedad2":
+      return (
+        <span className="relative inline-flex items-center justify-center" aria-hidden="true">
+          <FaWater className="text-amber-500" />
+          <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+        </span>
+      );
+    case "voltaje":
+      return <FaBolt className="text-green-500" aria-hidden="true" />;
+    case "luz":
+      return <FaSun className="text-yellow-500" aria-hidden="true" />;
+    case "presion":
+      return <FaCompressArrowsAlt className="text-green-500" aria-hidden="true" />;
+    default:
+      return null;
+  }
 }
 
 const metricDisplayOrder = [
@@ -1176,8 +1219,9 @@ const SensorDetail = () => {
                 key={key}
                 className="sensor-chart bg-white shadow-md rounded-lg p-4 border border-gray-300"
               >
-                <h2 className="text-lg text-center font-semibold">
-                  {getMetricLabel(key)} ({unitMap[key]})
+                <h2 className="text-lg text-center font-semibold flex items-center justify-center gap-2">
+                  {getMetricIcon(key)}
+                  <span>{getMetricLabel(key)} ({unitMap[key]})</span>
                 </h2>
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={chartData}>
@@ -1278,8 +1322,9 @@ const SensorDetail = () => {
               key={key}
               className="bg-white shadow-md rounded-lg p-4 border border-gray-300 data-table"
             >
-              <h2 className="text-lg text-center font-semibold">
-                {getMetricLabel(key)} ({unitMap[key]})
+              <h2 className="text-lg text-center font-semibold flex items-center justify-center gap-2">
+                {getMetricIcon(key)}
+                <span>{getMetricLabel(key)} ({unitMap[key]})</span>
               </h2>
               <table className="w-full mt-4 border-collapse border border-gray-300">
                 <thead>
