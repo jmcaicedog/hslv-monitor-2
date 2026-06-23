@@ -199,7 +199,7 @@ function Card({
             metrics.map((metric) => (
               <div key={metric.key} className="flex flex-col items-center">
                 {metric.icon}
-                <p className="text-sm">{metric.value.toFixed(2)} {metric.unit}</p>
+                <p className="text-sm">{metric.value.toFixed(1)} {metric.unit}</p>
               </div>
             ))
           ) : (
