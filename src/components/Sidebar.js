@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
-export default function Sidebar({ locations, onSelectLocation }) {
+export default function Sidebar({ locations, onSelectLocation, onOpenChange }) {
   const [isOpen, setIsOpen] = useState(false);
   const uniqueLocations = [...new Set(locations)];
+
+  useEffect(() => {
+    if (typeof onOpenChange === "function") {
+      onOpenChange(isOpen);
+    }
+  }, [isOpen, onOpenChange]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -19,7 +25,7 @@ export default function Sidebar({ locations, onSelectLocation }) {
   return (
     <>
       <button
-        className={`fixed top-4 left-4 z-[160] bg-gray-700 text-white px-4 py-2 rounded-md shadow-lg lg:hidden ${
+        className={`fixed top-4 left-4 z-[220] bg-gray-700 text-white px-4 py-2 rounded-md shadow-lg lg:hidden ${
           isOpen ? "hidden" : "block"
         }`}
         onClick={() => setIsOpen(true)}

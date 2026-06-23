@@ -21,6 +21,7 @@ export default function Home() {
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
   const normalizeMetric = (value) => {
@@ -93,11 +94,12 @@ export default function Home() {
     <Layout>
       <div className="flex">
         {/* Componente de menú lateral */}
-        <div className="w-0 lg:w-64 fixed z-[90] h-full overflow-hidden bg-gray-800 text-white p-0 lg:p-4 lg:z-auto">
+        <div className="w-0 lg:w-64 fixed z-[170] h-full overflow-visible bg-gray-800 text-white p-0 lg:p-4 lg:z-auto lg:overflow-hidden">
           {sensors.length > 0 ? (
             <Sidebar
               locations={uniqueLocations}
               onSelectLocation={setSelectedLocation}
+              onOpenChange={setIsSidebarOpen}
               itemSpacing="space-y-0"
             />
           ) : (
@@ -105,8 +107,12 @@ export default function Home() {
           )}
         </div>
         <div className="flex-1 p-6 pt-16 lg:p-6 ml-0 lg:ml-64">
-          <div className="sticky top-2 lg:top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur">
-            <div className="mb-2 flex items-center justify-end gap-2 pr-12 lg:pr-0">
+          <div
+            className={`sticky top-2 lg:top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur ${
+              isSidebarOpen ? "hidden lg:block" : "block"
+            }`}
+          >
+            <div className="mb-2 flex items-center justify-end gap-2">
               {isAdmin && (
                 <>
                   <Link
