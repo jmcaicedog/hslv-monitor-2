@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 4;
+const SENSOR_SCHEMA_VERSION = 5;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -21,6 +21,18 @@ function parsePayloadMetric(payload, key) {
 
   const parsed = Number.parseFloat(text.replace(",", "."));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeTextForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isCarroDeParoSensor({ title, description }) {
+  const haystack = `${normalizeTextForMatch(title)} ${normalizeTextForMatch(description)}`;
+  return haystack.includes("carro de paro");
 }
 
 export async function ensureSensorSchema() {
@@ -93,6 +105,8 @@ export async function ensureSensorSchema() {
           observed_at TIMESTAMPTZ NOT NULL,
           temperatura DOUBLE PRECISION,
           humedad DOUBLE PRECISION,
+          temperatura_2 DOUBLE PRECISION,
+          humedad_2 DOUBLE PRECISION,
           voltaje DOUBLE PRECISION,
           presion DOUBLE PRECISION,
           luz DOUBLE PRECISION,
@@ -105,6 +119,16 @@ export async function ensureSensorSchema() {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_sensor_readings_sensor_time
           ON sensor_readings(sensor_id, observed_at DESC);
+      `);
+
+      await client.query(`
+        ALTER TABLE sensor_readings
+        ADD COLUMN IF NOT EXISTS temperatura_2 DOUBLE PRECISION;
+      `);
+
+      await client.query(`
+        ALTER TABLE sensor_readings
+        ADD COLUMN IF NOT EXISTS humedad_2 DOUBLE PRECISION;
       `);
 
       await client.query(`
@@ -223,6 +247,8 @@ export async function getSensorsOverview() {
         COALESCE(s.last_seen_at, lr.observed_at) AS observed_at,
         lr.temperatura,
         lr.humedad,
+        lr.temperatura_2,
+        lr.humedad_2,
         lr.voltaje,
         lr.presion,
         lr.luz
@@ -233,6 +259,8 @@ export async function getSensorsOverview() {
           sr.observed_at,
           sr.temperatura,
           sr.humedad,
+          sr.temperatura_2,
+          sr.humedad_2,
           sr.voltaje,
           sr.presion,
           sr.luz
@@ -249,6 +277,11 @@ export async function getSensorsOverview() {
     const payload =
       row.last_payload && typeof row.last_payload === "object" ? row.last_payload : null;
 
+    const isCarroDeParo = isCarroDeParoSensor({
+      title: row.title,
+      description: row.description,
+    });
+
     return {
       id: Number(row.id),
       title: row.title,
@@ -261,6 +294,16 @@ export async function getSensorsOverview() {
       createdAt: row.observed_at,
       temperature: parsePayloadMetric(payload, "field1") ?? row.temperatura,
       humidity: parsePayloadMetric(payload, "field2") ?? row.humedad,
+      temperatureSecondary: isCarroDeParo
+        ? parsePayloadMetric(payload, "field4") ??
+          parsePayloadMetric(payload, "field7") ??
+          row.temperatura_2
+        : null,
+      humiditySecondary: isCarroDeParo
+        ? parsePayloadMetric(payload, "field5") ??
+          parsePayloadMetric(payload, "field8") ??
+          row.humedad_2
+        : null,
       voltage: parsePayloadMetric(payload, "field3") ?? row.voltaje,
       pressure: parsePayloadMetric(payload, "field9") ?? row.presion,
       light: parsePayloadMetric(payload, "field6") ?? row.luz,
@@ -373,6 +416,8 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
             END AS observed_at,
             AVG(temperatura) AS temperatura,
             AVG(humedad) AS humedad,
+            AVG(temperatura_2) AS temperatura_2,
+            AVG(humedad_2) AS humedad_2,
             AVG(voltaje) AS voltaje,
             AVG(presion) AS presion,
             AVG(luz) AS luz
@@ -396,6 +441,8 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
             observed_at,
             temperatura,
             humedad,
+            temperatura_2,
+            humedad_2,
             voltaje,
             presion,
             luz
@@ -415,6 +462,8 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
       timestamp: row.observed_at,
       temperatura: row.temperatura,
       humedad: row.humedad,
+      temperatura2: row.temperatura_2,
+      humedad2: row.humedad_2,
       voltaje: row.voltaje,
       presion: row.presion,
       luz: row.luz,

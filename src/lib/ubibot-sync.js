@@ -196,6 +196,8 @@ function mapFeedRecord(sensorId, feed) {
     observedAt: observedAt.toISOString(),
     temperatura: parseNumber(feed.field1?.avg ?? feed.field1),
     humedad: parseNumber(feed.field2?.avg ?? feed.field2),
+    temperatura2: parseNumber(feed.field4?.avg ?? feed.field4) ?? parseNumber(feed.field7?.avg ?? feed.field7),
+    humedad2: parseNumber(feed.field5?.avg ?? feed.field5) ?? parseNumber(feed.field8?.avg ?? feed.field8),
     voltaje: parseNumber(feed.field3?.avg ?? feed.field3),
     presion: parseNumber(feed.field9?.avg ?? feed.field9),
     luz: parseNumber(feed.field6?.avg ?? feed.field6),
@@ -209,6 +211,8 @@ async function upsertReadings(rows, source) {
   const observedAt = rows.map((r) => r.observedAt);
   const temperatura = rows.map((r) => r.temperatura);
   const humedad = rows.map((r) => r.humedad);
+  const temperatura2 = rows.map((r) => r.temperatura2);
+  const humedad2 = rows.map((r) => r.humedad2);
   const voltaje = rows.map((r) => r.voltaje);
   const presion = rows.map((r) => r.presion);
   const luz = rows.map((r) => r.luz);
@@ -221,6 +225,8 @@ async function upsertReadings(rows, source) {
         observed_at,
         temperatura,
         humedad,
+        temperatura_2,
+        humedad_2,
         voltaje,
         presion,
         luz,
@@ -235,18 +241,33 @@ async function upsertReadings(rows, source) {
         $5::double precision[],
         $6::double precision[],
         $7::double precision[],
-        $8::text[]
+        $8::double precision[],
+        $9::double precision[],
+        $10::text[]
       )
       ON CONFLICT (sensor_id, observed_at)
       DO UPDATE SET
         temperatura = COALESCE(EXCLUDED.temperatura, sensor_readings.temperatura),
         humedad = COALESCE(EXCLUDED.humedad, sensor_readings.humedad),
+        temperatura_2 = COALESCE(EXCLUDED.temperatura_2, sensor_readings.temperatura_2),
+        humedad_2 = COALESCE(EXCLUDED.humedad_2, sensor_readings.humedad_2),
         voltaje = COALESCE(EXCLUDED.voltaje, sensor_readings.voltaje),
         presion = COALESCE(EXCLUDED.presion, sensor_readings.presion),
         luz = COALESCE(EXCLUDED.luz, sensor_readings.luz),
         source = EXCLUDED.source;
     `,
-    [sensorIds, observedAt, temperatura, humedad, voltaje, presion, luz, sourceArr]
+    [
+      sensorIds,
+      observedAt,
+      temperatura,
+      humedad,
+      temperatura2,
+      humedad2,
+      voltaje,
+      presion,
+      luz,
+      sourceArr,
+    ]
   );
 }
 
@@ -817,6 +838,8 @@ async function runUbiBotSyncUnlocked(options = {}) {
                 new Date().toISOString(),
               temperatura: parseNumber(lastPayload.field1?.value),
               humedad: parseNumber(lastPayload.field2?.value),
+              temperatura2: parseNumber(lastPayload.field4?.value) ?? parseNumber(lastPayload.field7?.value),
+              humedad2: parseNumber(lastPayload.field5?.value) ?? parseNumber(lastPayload.field8?.value),
               voltaje: parseNumber(lastPayload.field3?.value),
               presion: parseNumber(lastPayload.field9?.value),
               luz: parseNumber(lastPayload.field6?.value),

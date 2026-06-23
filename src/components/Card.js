@@ -16,6 +16,8 @@ function Card({
   title,
   temperature,
   humidity,
+  temperatureSecondary,
+  humiditySecondary,
   voltage,
   pressure,
   light,
@@ -30,18 +32,37 @@ function Card({
   }, [createdAt]);
 
   const metrics = useMemo(() => {
+    const hasSecondaryClimateMetrics =
+      Number.isFinite(temperatureSecondary) || Number.isFinite(humiditySecondary);
+
     const allMetrics = [
       {
         key: "temperature",
         icon: <FaTemperatureHigh className="text-red-500 text-xl" />,
         value: temperature,
         unit: "°C",
+        badge: hasSecondaryClimateMetrics ? "T1" : null,
       },
       {
         key: "humidity",
         icon: <FaTint className="text-blue-500 text-xl" />,
         value: humidity,
         unit: "%",
+        badge: hasSecondaryClimateMetrics ? "H1" : null,
+      },
+      {
+        key: "temperature_secondary",
+        icon: <FaTemperatureHigh className="text-red-500 text-xl" />,
+        value: temperatureSecondary,
+        unit: "°C",
+        badge: "T2",
+      },
+      {
+        key: "humidity_secondary",
+        icon: <FaTint className="text-blue-500 text-xl" />,
+        value: humiditySecondary,
+        unit: "%",
+        badge: "H2",
       },
       {
         key: "voltage",
@@ -66,7 +87,15 @@ function Card({
     return allMetrics.filter(
       (metric) => Number.isFinite(metric.value) && metric.value !== 0
     );
-  }, [humidity, light, pressure, temperature, voltage]);
+  }, [
+    humidity,
+    humiditySecondary,
+    light,
+    pressure,
+    temperature,
+    temperatureSecondary,
+    voltage,
+  ]);
 
   const alarmIcons = useMemo(() => {
     if (!hasActiveAlarm || !Array.isArray(activeAlarmMetrics)) {
@@ -156,6 +185,11 @@ function Card({
             metrics.map((metric) => (
               <div key={metric.key} className="flex flex-col items-center">
                 {metric.icon}
+                {metric.badge ? (
+                  <span className="text-[10px] font-semibold leading-none text-gray-500 mb-0.5">
+                    {metric.badge}
+                  </span>
+                ) : null}
                 <p className="text-sm">{metric.value.toFixed(2)} {metric.unit}</p>
               </div>
             ))

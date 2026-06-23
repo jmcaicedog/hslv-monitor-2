@@ -30,11 +30,52 @@ const calculateMinMax = (data, key) => {
 
 const unitMap = {
   temperatura: "°C",
+  temperatura2: "°C",
   humedad: "%",
+  humedad2: "%",
   voltaje: "V",
   presion: "KPa",
   luz: "lx",
 };
+
+const metricLabelMap = {
+  temperatura: "Temperatura",
+  temperatura2: "Temperatura 2",
+  humedad: "Humedad",
+  humedad2: "Humedad 2",
+  voltaje: "Voltaje",
+  presion: "Presion",
+  luz: "Luz",
+};
+
+function getMetricLabel(metricKey) {
+  return metricLabelMap[metricKey] || metricKey.charAt(0).toUpperCase() + metricKey.slice(1);
+}
+
+const metricDisplayOrder = [
+  "temperatura",
+  "humedad",
+  "temperatura2",
+  "humedad2",
+  "voltaje",
+  "presion",
+  "luz",
+];
+
+function getOrderedMetricKeys(metricMap = {}) {
+  return Object.keys(metricMap).sort((a, b) => {
+    const orderA = metricDisplayOrder.indexOf(a);
+    const orderB = metricDisplayOrder.indexOf(b);
+    const rankA = orderA === -1 ? Number.POSITIVE_INFINITY : orderA;
+    const rankB = orderB === -1 ? Number.POSITIVE_INFINITY : orderB;
+
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+
+    return a.localeCompare(b);
+  });
+}
 
 function waitForNextFrame() {
   return new Promise((resolve) => {
@@ -589,10 +630,12 @@ const SensorDetail = () => {
     }, {});
   }, [dailyMinMax, filteredData]);
 
+  const orderedMetricKeys = useMemo(() => getOrderedMetricKeys(dailyMinMax), [dailyMinMax]);
+
   const chartSeriesByMetric = useMemo(() => {
     const byMetric = {};
 
-    Object.keys(dailyMinMax).forEach((key) => {
+    orderedMetricKeys.forEach((key) => {
       const rawSeries = filteredData.filter(
         (d) => d[key] != null && !Number.isNaN(parseFloat(d[key]))
       );
@@ -600,7 +643,7 @@ const SensorDetail = () => {
     });
 
     return byMetric;
-  }, [dailyMinMax, filteredData]);
+  }, [filteredData, orderedMetricKeys]);
 
   useEffect(() => {
     setTablePageByMetric({});
@@ -704,7 +747,7 @@ const SensorDetail = () => {
 
       const captureScale = 1;
 
-      const metricKeys = Object.keys(dailyMinMax);
+      const metricKeys = orderedMetricKeys;
       const totalSteps = Math.max(1, chartElements.length + metricKeys.length + 1);
       let completedSteps = 0;
 
@@ -750,7 +793,7 @@ const SensorDetail = () => {
           max: Number(dailyMinMax[key][date]?.max),
         }));
 
-        const metricTitle = `${key.charAt(0).toUpperCase() + key.slice(1)} (${unitMap[key] || ""})`;
+        const metricTitle = `${getMetricLabel(key)} (${unitMap[key] || ""})`;
 
         yOffset = drawPdfMetricTable(doc, {
           metricTitle,
@@ -829,7 +872,7 @@ const SensorDetail = () => {
     lines.push(`Generado;${escapeCsvCell(generatedAt)}`);
     lines.push("");
 
-    const metricKeys = Object.keys(dailyMinMax);
+    const metricKeys = orderedMetricKeys;
     const totalSteps = Math.max(1, metricKeys.length + 1);
     let completedSteps = 0;
 
@@ -1118,7 +1161,7 @@ const SensorDetail = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {filteredData.length > 0 &&
-          Object.keys(dailyMinMax).map((key) => {
+          orderedMetricKeys.map((key) => {
             const chartData = chartSeriesByMetric[key] || [];
 
             if (chartData.length === 0 || minMaxValues[key].min == null) {
@@ -1131,7 +1174,7 @@ const SensorDetail = () => {
                 className="sensor-chart bg-white shadow-md rounded-lg p-4 border border-gray-300"
               >
                 <h2 className="text-lg text-center font-semibold">
-                  {key.charAt(0).toUpperCase() + key.slice(1)} ({unitMap[key]})
+                  {getMetricLabel(key)} ({unitMap[key]})
                 </h2>
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={chartData}>
@@ -1215,7 +1258,7 @@ const SensorDetail = () => {
           })}
       </div>
       <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
-        {Object.keys(dailyMinMax).map((key) => {
+        {orderedMetricKeys.map((key) => {
           const sortedDates = Object.keys(dailyMinMax[key] || {}).sort((a, b) =>
             a.localeCompare(b)
           );
@@ -1233,7 +1276,7 @@ const SensorDetail = () => {
               className="bg-white shadow-md rounded-lg p-4 border border-gray-300 data-table"
             >
               <h2 className="text-lg text-center font-semibold">
-                {key.charAt(0).toUpperCase() + key.slice(1)} ({unitMap[key]})
+                {getMetricLabel(key)} ({unitMap[key]})
               </h2>
               <table className="w-full mt-4 border-collapse border border-gray-300">
                 <thead>

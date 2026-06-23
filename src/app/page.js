@@ -66,6 +66,8 @@ export default function Home() {
           ...sensor,
           temperature: normalizeMetric(sensor.temperature),
           humidity: normalizeMetric(sensor.humidity),
+          temperatureSecondary: normalizeMetric(sensor.temperatureSecondary),
+          humiditySecondary: normalizeMetric(sensor.humiditySecondary),
           voltage: normalizeMetric(sensor.voltage),
           pressure: normalizeMetric(sensor.pressure),
           light: normalizeMetric(sensor.light),
