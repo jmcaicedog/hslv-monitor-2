@@ -6,15 +6,16 @@ import {
   FaTimes,
   FaFileCsv,
   FaFilePdf,
-  FaTemperatureHigh,
-  FaThermometerHalf,
-  FaTint,
-  FaWater,
-  FaBolt,
-  FaSun,
-  FaCompressArrowsAlt,
-  FaWaveSquare,
 } from "react-icons/fa";
+import {
+  Cable,
+  Droplet,
+  Droplets,
+  Gauge,
+  Sun,
+  Thermometer,
+  Zap,
+} from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { useParams } from "next/navigation";
@@ -52,9 +53,9 @@ const unitMap = {
 
 const metricLabelMap = {
   temperatura: "Temperatura",
-  temperatura2: "Temperatura 2",
+  temperatura2: "Temperatura de Sonda",
   humedad: "Humedad",
-  humedad2: "Humedad 2",
+  humedad2: "Humedad de Sonda",
   voltaje: "Voltaje",
   presion: "Presion",
   luz: "Luz",
@@ -67,29 +68,36 @@ function getMetricLabel(metricKey) {
 function getMetricIcon(metricKey) {
   switch (metricKey) {
     case "temperatura":
-      return <FaTemperatureHigh className="text-red-500" aria-hidden="true" />;
+      return <Thermometer className="h-5 w-5 text-lime-500" strokeWidth={2.2} aria-hidden="true" />;
     case "humedad":
-      return <FaTint className="text-red-600" aria-hidden="true" />;
+      return (
+        <Droplet
+          className="h-5 w-5 text-red-600"
+          fill="currentColor"
+          strokeWidth={1.8}
+          aria-hidden="true"
+        />
+      );
     case "temperatura2":
       return (
         <span className="relative inline-flex items-center justify-center" aria-hidden="true">
-          <FaThermometerHalf className="text-green-500" />
-          <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          <Thermometer className="h-5 w-5 text-lime-500" strokeWidth={2.2} />
+          <Cable className="absolute -right-2 -bottom-1 h-3 w-3 text-gray-500" strokeWidth={2.2} />
         </span>
       );
     case "humedad2":
       return (
         <span className="relative inline-flex items-center justify-center" aria-hidden="true">
-          <FaWater className="text-amber-500" />
-          <FaWaveSquare className="absolute -right-2 -bottom-1 text-[10px] text-gray-500" />
+          <Droplets className="h-5 w-5 text-amber-500" strokeWidth={2.1} />
+          <Cable className="absolute -right-2 -bottom-1 h-3 w-3 text-amber-500" strokeWidth={2.2} />
         </span>
       );
     case "voltaje":
-      return <FaBolt className="text-green-500" aria-hidden="true" />;
+      return <Zap className="h-5 w-5 text-lime-500" strokeWidth={2.5} aria-hidden="true" />;
     case "luz":
-      return <FaSun className="text-yellow-500" aria-hidden="true" />;
+      return <Sun className="h-5 w-5 text-yellow-500" strokeWidth={2.1} aria-hidden="true" />;
     case "presion":
-      return <FaCompressArrowsAlt className="text-green-500" aria-hidden="true" />;
+      return <Gauge className="h-5 w-5 text-green-500" strokeWidth={2.2} aria-hidden="true" />;
     default:
       return null;
   }
