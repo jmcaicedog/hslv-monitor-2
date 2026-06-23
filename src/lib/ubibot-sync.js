@@ -187,6 +187,46 @@ function parseJsonEnv(raw, fallback = {}) {
   }
 }
 
+async function pruneRemovedSensors(activeSensorIds) {
+  const activeSet = new Set(
+    (activeSensorIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id))
+  );
+
+  const existingSensors = await query(`SELECT id FROM sensors;`);
+  const removedSensorIds = existingSensors.rows
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isFinite(id) && !activeSet.has(id));
+
+  if (removedSensorIds.length === 0) {
+    return {
+      removedSensors: 0,
+      removedSensorIds: [],
+    };
+  }
+
+  await query(
+    `DELETE FROM alert_notification_state WHERE sensor_id = ANY($1::bigint[]);`,
+    [removedSensorIds]
+  );
+
+  await query(
+    `DELETE FROM sensor_alarm_state WHERE sensor_id = ANY($1::bigint[]);`,
+    [removedSensorIds]
+  );
+
+  await query(
+    `DELETE FROM sync_pending_sensors WHERE sensor_id = ANY($1::bigint[]);`,
+    [removedSensorIds]
+  );
+
+  await query(`DELETE FROM sensors WHERE id = ANY($1::bigint[]);`, [removedSensorIds]);
+
+  return {
+    removedSensors: removedSensorIds.length,
+    removedSensorIds,
+  };
+}
+
 function normalizeTextForMatch(value) {
   return String(value || "")
     .toLowerCase()
@@ -726,6 +766,36 @@ async function runUbiBotSyncUnlocked(options = {}) {
   const channelsPayload = channelsResult.payload || {};
   const channels = channelsPayload.channels || [];
   const sensorFilter = parseSensorIdFilter(process.env.UBIBOT_ONLY_SENSOR_IDS);
+  const pruneRemovedSensorsEnabled =
+    options.pruneRemovedSensors !== false &&
+    String(process.env.UBIBOT_PRUNE_REMOVED_SENSORS || "true").toLowerCase() !== "false";
+  const shouldPruneRemovedSensors = pruneRemovedSensorsEnabled && !sensorFilter;
+  let pruneSummary = {
+    removedSensors: 0,
+    removedSensorIds: [],
+    pruneSkippedReason: null,
+  };
+
+  if (shouldPruneRemovedSensors) {
+    const activeSensorIds = channels
+      .map((channel) => Number(channel.channel_id))
+      .filter((id) => Number.isFinite(id));
+
+    if (activeSensorIds.length > 0) {
+      const removed = await pruneRemovedSensors(activeSensorIds);
+      pruneSummary = {
+        ...pruneSummary,
+        ...removed,
+      };
+    } else {
+      pruneSummary.pruneSkippedReason = "empty_channels_payload";
+    }
+  } else {
+    pruneSummary.pruneSkippedReason = sensorFilter
+      ? "filtered_sync"
+      : "prune_disabled";
+  }
+
   const useChannelRotation = !sensorFilter && maxChannelsPerRun > 0;
   const baseCursor = useChannelRotation ? await getChannelCursor() : 0;
   const duePendingSensorIds = await getDuePendingSensorIds();
@@ -1083,6 +1153,9 @@ async function runUbiBotSyncUnlocked(options = {}) {
     elapsedMs,
     timeBudgetMs: Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
     feedsResultsLimit,
+    removedSensors: pruneSummary.removedSensors,
+    removedSensorIds: pruneSummary.removedSensorIds,
+    pruneSkippedReason: pruneSummary.pruneSkippedReason,
     totalInserted,
     lockSkipped: false,
   };
@@ -1149,6 +1222,9 @@ export async function runUbiBotSync(options = {}) {
     feedsPermissionDeniedHits: 0,
     accountKeyFeedsDeniedMode: false,
     circuitBroken: false,
+    removedSensors: 0,
+    removedSensorIds: [],
+    pruneSkippedReason: "lock_skipped",
     totalInserted: 0,
     lockSkipped: true,
   };

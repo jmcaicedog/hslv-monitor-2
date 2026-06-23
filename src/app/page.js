@@ -134,8 +134,8 @@ export default function Home() {
         <div className="flex-1 p-6 pt-16 lg:p-6 ml-0 lg:ml-64">
           <p className="mb-2">
             {selectedLocation
-              ? `📍 Mostrando sensores de: ${selectedLocation}`
-              : "🌍 Mostrando todos los sensores"}
+              ? `📍 Mostrando sensores de: ${selectedLocation} (${filteredSensors.length})`
+              : `🌍 Mostrando todos los sensores (${filteredSensors.length})`}
           </p>
           {/* Componente de barra de búsqueda */}
           <SearchBar value={searchTerm} onChange={setSearchTerm} />
