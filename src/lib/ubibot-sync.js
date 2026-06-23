@@ -210,10 +210,14 @@ function mapFeedRecord(sensorId, feed, options = {}) {
     observedAt: observedAt.toISOString(),
     temperatura: parseNumber(feed.field1?.avg ?? feed.field1),
     humedad: parseNumber(feed.field2?.avg ?? feed.field2),
-    temperatura2: parseNumber(feed.field4?.avg ?? feed.field4),
-    humedad2: parseNumber(feed.field5?.avg ?? feed.field5),
+    temperatura2: isCarroDeParo
+      ? parseNumber(feed.field9?.avg ?? feed.field9)
+      : parseNumber(feed.field4?.avg ?? feed.field4),
+    humedad2: isCarroDeParo
+      ? parseNumber(feed.field10?.avg ?? feed.field10)
+      : parseNumber(feed.field5?.avg ?? feed.field5),
     voltaje: isCarroDeParo
-      ? parseNumber(feed.field6?.avg ?? feed.field6)
+      ? parseNumber(feed.field4?.avg ?? feed.field4)
       : parseNumber(feed.field3?.avg ?? feed.field3),
     presion: isCarroDeParo ? null : parseNumber(feed.field9?.avg ?? feed.field9),
     luz: isCarroDeParo
@@ -858,10 +862,14 @@ async function runUbiBotSyncUnlocked(options = {}) {
                 new Date().toISOString(),
               temperatura: parseNumber(lastPayload.field1?.value),
               humedad: parseNumber(lastPayload.field2?.value),
-              temperatura2: parseNumber(lastPayload.field4?.value),
-              humedad2: parseNumber(lastPayload.field5?.value),
+              temperatura2: isCarroDeParo
+                ? parseNumber(lastPayload.field9?.value)
+                : parseNumber(lastPayload.field4?.value),
+              humedad2: isCarroDeParo
+                ? parseNumber(lastPayload.field10?.value)
+                : parseNumber(lastPayload.field5?.value),
               voltaje: isCarroDeParo
-                ? parseNumber(lastPayload.field6?.value)
+                ? parseNumber(lastPayload.field4?.value)
                 : parseNumber(lastPayload.field3?.value),
               presion: isCarroDeParo ? null : parseNumber(lastPayload.field9?.value),
               luz: isCarroDeParo

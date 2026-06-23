@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 7;
+const SENSOR_SCHEMA_VERSION = 8;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -155,7 +155,7 @@ export async function ensureSensorSchema() {
           ) ~* 'carro\\s*(de\\s*)?paro';
       `);
 
-      // Carro de Paro no usa presion; limpia historico y valores de humedad2 invalidos.
+      // Carro de Paro no usa presion; limpia historico y valores invalidos arrastrados.
       await client.query(`
         UPDATE sensor_readings sr
         SET presion = NULL
@@ -175,6 +175,22 @@ export async function ensureSensorSchema() {
           AND (
             COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
           ) ~* 'carro\\s*(de\\s*)?paro';
+      `);
+
+      await client.query(`
+        UPDATE sensor_readings sr
+        SET
+          temperatura_2 = NULL,
+          humedad_2 = NULL
+        FROM sensors s
+        WHERE s.id = sr.sensor_id
+          AND (
+            COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
+          ) ~* 'carro\\s*(de\\s*)?paro'
+          AND (
+            sr.temperatura_2 IS NOT NULL AND sr.temperatura_2 < 10
+            OR sr.humedad_2 IS NOT NULL AND sr.humedad_2 < 0
+          );
       `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS sync_pending_sensors (
@@ -340,13 +356,13 @@ export async function getSensorsOverview() {
       temperature: parsePayloadMetric(payload, "field1") ?? row.temperatura,
       humidity: parsePayloadMetric(payload, "field2") ?? row.humedad,
       temperatureSecondary: isCarroDeParo
-        ? parsePayloadMetricAny(payload, ["field4"]) ?? row.temperatura_2
+        ? parsePayloadMetricAny(payload, ["field9"]) ?? row.temperatura_2
         : null,
       humiditySecondary: isCarroDeParo
-        ? parsePayloadMetricAny(payload, ["field5"]) ?? row.humedad_2
+        ? parsePayloadMetricAny(payload, ["field10"]) ?? row.humedad_2
         : null,
       voltage: isCarroDeParo
-        ? parsePayloadMetricAny(payload, ["field6"]) ?? row.voltaje
+        ? parsePayloadMetricAny(payload, ["field4"]) ?? row.voltaje
         : parsePayloadMetricAny(payload, ["field3"]) ?? row.voltaje,
       pressure: isCarroDeParo
         ? null
