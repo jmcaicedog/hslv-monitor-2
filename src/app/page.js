@@ -104,35 +104,35 @@ export default function Home() {
             <p className="text-white p-4">Cargando ubicaciones...</p>
           )}
         </div>
-        <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6 z-[130] flex items-center gap-2 rounded-xl border border-gray-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur">
-          {isAdmin && (
-            <>
-              <Link
-                href="/admin/users"
-                className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full flex items-center shadow-lg"
-                title="Administrar usuarios"
-              >
-                <Users size={20} />
-              </Link>
-              <Link
-                href="/admin/alerts"
-                className="bg-amber-600 hover:bg-amber-500 text-white p-2 rounded-full flex items-center shadow-lg"
-                title="Configurar notificaciones"
-              >
-                <Bell size={20} />
-              </Link>
-            </>
-          )}
-          <button
-            onClick={() => authClient.signOut()}
-            className="bg-red-600 hover:bg-red-500 text-white p-2 rounded-full flex items-center shadow-lg"
-            title="Cerrar sesión"
-          >
-            <LogOut size={20} />
-          </button>
-        </div>
         <div className="flex-1 p-6 pt-16 lg:p-6 ml-0 lg:ml-64">
           <div className="sticky top-2 lg:top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur">
+            <div className="mb-2 flex items-center justify-end gap-2 pr-12 lg:pr-0">
+              {isAdmin && (
+                <>
+                  <Link
+                    href="/admin/users"
+                    className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                    title="Administrar usuarios"
+                  >
+                    <Users size={20} />
+                  </Link>
+                  <Link
+                    href="/admin/alerts"
+                    className="bg-amber-600 hover:bg-amber-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                    title="Configurar notificaciones"
+                  >
+                    <Bell size={20} />
+                  </Link>
+                </>
+              )}
+              <button
+                onClick={() => authClient.signOut()}
+                className="bg-red-600 hover:bg-red-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                title="Cerrar sesión"
+              >
+                <LogOut size={20} />
+              </button>
+            </div>
             <p className="mb-2">
               {selectedLocation
                 ? `📍 Mostrando sensores de: ${selectedLocation} (${filteredSensors.length})`

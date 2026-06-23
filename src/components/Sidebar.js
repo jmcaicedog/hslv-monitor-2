@@ -19,7 +19,7 @@ export default function Sidebar({ locations, onSelectLocation }) {
   return (
     <>
       <button
-        className={`fixed top-4 right-4 z-[120] bg-gray-700 text-white px-4 py-2 rounded-md lg:hidden ${
+        className={`fixed top-4 left-4 z-[160] bg-gray-700 text-white px-4 py-2 rounded-md shadow-lg lg:hidden ${
           isOpen ? "hidden" : "block"
         }`}
         onClick={() => setIsOpen(true)}
