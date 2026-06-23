@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 5;
+const SENSOR_SCHEMA_VERSION = 6;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -33,6 +33,17 @@ function normalizeTextForMatch(value) {
 function isCarroDeParoSensor({ title, description }) {
   const haystack = `${normalizeTextForMatch(title)} ${normalizeTextForMatch(description)}`;
   return haystack.includes("carro de paro");
+}
+
+function parsePayloadMetricAny(payload, keys) {
+  for (const key of keys) {
+    const metric = parsePayloadMetric(payload, key);
+    if (metric !== null) {
+      return metric;
+    }
+  }
+
+  return null;
 }
 
 export async function ensureSensorSchema() {
@@ -131,6 +142,18 @@ export async function ensureSensorSchema() {
         ADD COLUMN IF NOT EXISTS humedad_2 DOUBLE PRECISION;
       `);
 
+      // Corrige historico previo de Carro de Paro donde se guardo luz/voltaje invertidos.
+      await client.query(`
+        UPDATE sensor_readings sr
+        SET
+          voltaje = sr.luz,
+          luz = sr.voltaje
+        FROM sensors s
+        WHERE s.id = sr.sensor_id
+          AND (
+            COALESCE(s.title, '') || ' ' || COALESCE(s.description, '')
+          ) ~* 'carro\\s*(de\\s*)?paro';
+      `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS sync_pending_sensors (
           sensor_id BIGINT PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
@@ -295,18 +318,18 @@ export async function getSensorsOverview() {
       temperature: parsePayloadMetric(payload, "field1") ?? row.temperatura,
       humidity: parsePayloadMetric(payload, "field2") ?? row.humedad,
       temperatureSecondary: isCarroDeParo
-        ? parsePayloadMetric(payload, "field4") ??
-          parsePayloadMetric(payload, "field7") ??
-          row.temperatura_2
+        ? parsePayloadMetricAny(payload, ["field4"]) ?? row.temperatura_2
         : null,
       humiditySecondary: isCarroDeParo
-        ? parsePayloadMetric(payload, "field5") ??
-          parsePayloadMetric(payload, "field8") ??
-          row.humedad_2
+        ? parsePayloadMetricAny(payload, ["field5"]) ?? row.humedad_2
         : null,
-      voltage: parsePayloadMetric(payload, "field3") ?? row.voltaje,
+      voltage: isCarroDeParo
+        ? parsePayloadMetricAny(payload, ["field6"]) ?? row.voltaje
+        : parsePayloadMetricAny(payload, ["field3"]) ?? row.voltaje,
       pressure: parsePayloadMetric(payload, "field9") ?? row.presion,
-      light: parsePayloadMetric(payload, "field6") ?? row.luz,
+      light: isCarroDeParo
+        ? parsePayloadMetricAny(payload, ["field3"]) ?? row.luz
+        : parsePayloadMetricAny(payload, ["field6"]) ?? row.luz,
     };
   });
 }

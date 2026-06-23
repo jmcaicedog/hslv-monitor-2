@@ -187,20 +187,38 @@ function parseJsonEnv(raw, fallback = {}) {
   }
 }
 
-function mapFeedRecord(sensorId, feed) {
+function normalizeTextForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isCarroDeParoChannel(channel) {
+  const haystack = `${normalizeTextForMatch(channel?.name)} ${normalizeTextForMatch(channel?.description)}`;
+  return haystack.includes("carro de paro");
+}
+
+function mapFeedRecord(sensorId, feed, options = {}) {
   const observedAt = new Date(feed.created_at);
   if (Number.isNaN(observedAt.getTime())) return null;
+
+  const isCarroDeParo = options.isCarroDeParo === true;
 
   return {
     sensorId,
     observedAt: observedAt.toISOString(),
     temperatura: parseNumber(feed.field1?.avg ?? feed.field1),
     humedad: parseNumber(feed.field2?.avg ?? feed.field2),
-    temperatura2: parseNumber(feed.field4?.avg ?? feed.field4) ?? parseNumber(feed.field7?.avg ?? feed.field7),
-    humedad2: parseNumber(feed.field5?.avg ?? feed.field5) ?? parseNumber(feed.field8?.avg ?? feed.field8),
-    voltaje: parseNumber(feed.field3?.avg ?? feed.field3),
+    temperatura2: parseNumber(feed.field4?.avg ?? feed.field4),
+    humedad2: parseNumber(feed.field5?.avg ?? feed.field5),
+    voltaje: isCarroDeParo
+      ? parseNumber(feed.field6?.avg ?? feed.field6)
+      : parseNumber(feed.field3?.avg ?? feed.field3),
     presion: parseNumber(feed.field9?.avg ?? feed.field9),
-    luz: parseNumber(feed.field6?.avg ?? feed.field6),
+    luz: isCarroDeParo
+      ? parseNumber(feed.field3?.avg ?? feed.field3)
+      : parseNumber(feed.field6?.avg ?? feed.field6),
   };
 }
 
@@ -790,6 +808,8 @@ async function runUbiBotSyncUnlocked(options = {}) {
     const sensorId = Number(channel.channel_id);
     if (!Number.isFinite(sensorId)) continue;
 
+    const isCarroDeParo = isCarroDeParoChannel(channel);
+
     try {
       let lastPayload = null;
       try {
@@ -838,11 +858,15 @@ async function runUbiBotSyncUnlocked(options = {}) {
                 new Date().toISOString(),
               temperatura: parseNumber(lastPayload.field1?.value),
               humedad: parseNumber(lastPayload.field2?.value),
-              temperatura2: parseNumber(lastPayload.field4?.value) ?? parseNumber(lastPayload.field7?.value),
-              humedad2: parseNumber(lastPayload.field5?.value) ?? parseNumber(lastPayload.field8?.value),
-              voltaje: parseNumber(lastPayload.field3?.value),
+              temperatura2: parseNumber(lastPayload.field4?.value),
+              humedad2: parseNumber(lastPayload.field5?.value),
+              voltaje: isCarroDeParo
+                ? parseNumber(lastPayload.field6?.value)
+                : parseNumber(lastPayload.field3?.value),
               presion: parseNumber(lastPayload.field9?.value),
-              luz: parseNumber(lastPayload.field6?.value),
+              luz: isCarroDeParo
+                ? parseNumber(lastPayload.field3?.value)
+                : parseNumber(lastPayload.field6?.value),
             },
           ]
         : [];
@@ -926,7 +950,9 @@ async function runUbiBotSyncUnlocked(options = {}) {
       let seriesFetchSucceeded = false;
 
       if (feedsPayload.ok && feedsPayload.feeds.length > 0) {
-        readings = feedsPayload.feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
+        readings = feedsPayload.feeds
+          .map((feed) => mapFeedRecord(sensorId, feed, { isCarroDeParo }))
+          .filter(Boolean);
         sourceForSeries = feedsPayload.source || "api_feed";
         seriesFetchSucceeded = true;
       } else {
@@ -984,7 +1010,9 @@ async function runUbiBotSyncUnlocked(options = {}) {
 
         const summaryPayload = summaryResult.payload || {};
         const feeds = summaryPayload.feeds || [];
-        readings = feeds.map((feed) => mapFeedRecord(sensorId, feed)).filter(Boolean);
+        readings = feeds
+          .map((feed) => mapFeedRecord(sensorId, feed, { isCarroDeParo }))
+          .filter(Boolean);
         seriesFetchSucceeded = true;
       }
 

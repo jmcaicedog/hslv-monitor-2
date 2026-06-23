@@ -62,6 +62,8 @@ const metricDisplayOrder = [
   "luz",
 ];
 
+const allowedMetricKeys = new Set(metricDisplayOrder);
+
 function getOrderedMetricKeys(metricMap = {}) {
   return Object.keys(metricMap).sort((a, b) => {
     const orderA = metricDisplayOrder.indexOf(a);
@@ -600,6 +602,7 @@ const SensorDetail = () => {
 
       Object.keys(entry).forEach((key) => {
         if (key === "timestamp") return;
+        if (!allowedMetricKeys.has(key)) return;
 
         const value = parseFloat(entry[key]);
         if (Number.isNaN(value)) return;
