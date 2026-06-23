@@ -108,7 +108,7 @@ export default function Home() {
         </div>
         <div className="flex-1 p-6 pt-16 lg:p-6 ml-0 lg:ml-64">
           <div
-            className={`sticky top-2 lg:top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur ${
+            className={`sticky top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur ${
               isSidebarOpen ? "hidden lg:block" : "block"
             }`}
           >
