@@ -104,7 +104,7 @@ export default function Home() {
             <p className="text-white p-4">Cargando ubicaciones...</p>
           )}
         </div>
-        <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6 flex items-center gap-2">
+        <div className="fixed top-[18px] lg:top-4 right-[80px] lg:right-6 z-[130] flex items-center gap-2 rounded-xl border border-gray-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur">
           {isAdmin && (
             <>
               <Link
@@ -132,13 +132,15 @@ export default function Home() {
           </button>
         </div>
         <div className="flex-1 p-6 pt-16 lg:p-6 ml-0 lg:ml-64">
-          <p className="mb-2">
-            {selectedLocation
-              ? `📍 Mostrando sensores de: ${selectedLocation} (${filteredSensors.length})`
-              : `🌍 Mostrando todos los sensores (${filteredSensors.length})`}
-          </p>
-          {/* Componente de barra de búsqueda */}
-          <SearchBar value={searchTerm} onChange={setSearchTerm} />
+          <div className="sticky top-2 lg:top-0 z-[120] -mx-2 mb-4 rounded-b-xl border-b border-gray-200 bg-white/95 px-2 pb-3 pt-2 shadow-sm backdrop-blur">
+            <p className="mb-2">
+              {selectedLocation
+                ? `📍 Mostrando sensores de: ${selectedLocation} (${filteredSensors.length})`
+                : `🌍 Mostrando todos los sensores (${filteredSensors.length})`}
+            </p>
+            {/* Componente de barra de búsqueda */}
+            <SearchBar value={searchTerm} onChange={setSearchTerm} />
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {filteredSensors.length > 0 ? (
               filteredSensors.map((sensor) => (
