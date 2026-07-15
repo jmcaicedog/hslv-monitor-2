@@ -4,9 +4,24 @@ import { randomUUID } from "node:crypto";
 
 const BATCH_SIZE = 1000;
 const DEFAULT_FEEDS_RESULTS_LIMIT = 2016;
+const DEFAULT_FEEDS_SAMPLE_MINUTES = 5;
+const DEFAULT_CHECKPOINT_OVERLAP_MINUTES = 30;
+const DEFAULT_MIN_FEEDS_RESULTS = 24;
 const FEEDS_RESULTS_LIMIT = parsePositiveInt(
   process.env.UBIBOT_FEEDS_RESULTS_LIMIT,
   DEFAULT_FEEDS_RESULTS_LIMIT
+);
+const UBIBOT_FEEDS_SAMPLE_MINUTES = parsePositiveInt(
+  process.env.UBIBOT_FEEDS_SAMPLE_MINUTES,
+  DEFAULT_FEEDS_SAMPLE_MINUTES
+);
+const UBIBOT_SYNC_CHECKPOINT_OVERLAP_MINUTES = parsePositiveInt(
+  process.env.UBIBOT_SYNC_CHECKPOINT_OVERLAP_MINUTES,
+  DEFAULT_CHECKPOINT_OVERLAP_MINUTES
+);
+const UBIBOT_SYNC_MIN_FEEDS_RESULTS = parsePositiveInt(
+  process.env.UBIBOT_SYNC_MIN_FEEDS_RESULTS,
+  DEFAULT_MIN_FEEDS_RESULTS
 );
 const UBIBOT_MAX_RETRIES = 3;
 const UBIBOT_RETRY_BACKOFF_MS = 4000;
@@ -177,14 +192,135 @@ function chunk(arr, size) {
   return result;
 }
 
-function parseJsonEnv(raw, fallback = {}) {
-  if (!raw) return fallback;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : fallback;
-  } catch {
-    return fallback;
+function parseIsoTimestamp(raw) {
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return null;
   }
+
+  return date;
+}
+
+function deriveIncrementalFeedsResultsLimit({
+  defaultLimit,
+  checkpointObservedAt,
+  overlapMinutes,
+  sampleMinutes,
+  minResults,
+}) {
+  const checkpoint = parseIsoTimestamp(checkpointObservedAt);
+  if (!checkpoint) {
+    return defaultLimit;
+  }
+
+  const elapsedMs = Math.max(0, nowMs() - checkpoint.getTime());
+  const elapsedMinutes = Math.ceil(elapsedMs / 60000);
+  const targetMinutes = elapsedMinutes + Math.max(0, overlapMinutes);
+  const estimatedPoints = Math.ceil(targetMinutes / Math.max(1, sampleMinutes));
+
+  return Math.max(1, Math.min(defaultLimit, Math.max(minResults, estimatedPoints)));
+}
+
+function filterSummaryReadingsForCheckpoint({
+  rows,
+  checkpointObservedAt,
+  overlapMinutes,
+  maxRows,
+}) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  const checkpoint = parseIsoTimestamp(checkpointObservedAt);
+  const overlapMs = Math.max(0, overlapMinutes) * 60000;
+
+  const filtered = checkpoint
+    ? rows.filter((row) => {
+        const observedAt = parseIsoTimestamp(row.observedAt);
+        if (!observedAt) return false;
+        return observedAt.getTime() >= checkpoint.getTime() - overlapMs;
+      })
+    : rows;
+
+  if (!Number.isFinite(maxRows) || maxRows <= 0 || filtered.length <= maxRows) {
+    return filtered;
+  }
+
+  return filtered.slice(0, maxRows);
+}
+
+async function getSensorCheckpointMap(sensorIds) {
+  const uniqueIds = [...new Set(sensorIds.filter((id) => Number.isFinite(id)))];
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const { rows } = await query(
+    `
+      SELECT sensor_id, last_observed_at
+      FROM sensor_sync_checkpoint
+      WHERE sensor_id = ANY($1::bigint[]);
+    `,
+    [uniqueIds]
+  );
+
+  const result = new Map();
+  for (const row of rows) {
+    const sensorId = Number(row.sensor_id);
+    if (!Number.isFinite(sensorId)) continue;
+    result.set(sensorId, row.last_observed_at);
+  }
+
+  return result;
+}
+
+async function upsertSensorCheckpoints(rows) {
+  if (rows.length === 0) return;
+
+  const maxObservedAtBySensor = new Map();
+
+  for (const row of rows) {
+    const sensorId = Number(row.sensorId);
+    const observedAt = parseIsoTimestamp(row.observedAt);
+    if (!Number.isFinite(sensorId) || !observedAt) {
+      continue;
+    }
+
+    const previous = maxObservedAtBySensor.get(sensorId);
+    if (!previous || observedAt.getTime() > previous.getTime()) {
+      maxObservedAtBySensor.set(sensorId, observedAt);
+    }
+  }
+
+  if (maxObservedAtBySensor.size === 0) {
+    return;
+  }
+
+  const checkpointSensorIds = [];
+  const checkpointObservedAt = [];
+
+  for (const [sensorId, observedAt] of maxObservedAtBySensor.entries()) {
+    checkpointSensorIds.push(sensorId);
+    checkpointObservedAt.push(observedAt.toISOString());
+  }
+
+  await query(
+    `
+      INSERT INTO sensor_sync_checkpoint (sensor_id, last_observed_at)
+      SELECT *
+      FROM UNNEST($1::bigint[], $2::timestamptz[])
+      ON CONFLICT (sensor_id)
+      DO UPDATE SET
+        last_observed_at = GREATEST(
+          sensor_sync_checkpoint.last_observed_at,
+          EXCLUDED.last_observed_at
+        ),
+        updated_at = NOW();
+    `,
+    [checkpointSensorIds, checkpointObservedAt]
+  );
 }
 
 async function pruneRemovedSensors(activeSensorIds) {
@@ -331,93 +467,8 @@ async function upsertReadings(rows, source) {
       sourceArr,
     ]
   );
-}
 
-async function fetchFeedsSeries({
-  sensorId,
-  apiKey,
-  accountKey,
-  feedsResultsLimit,
-  requestTimeoutMs,
-  enableRetry,
-  deadlineAt,
-}) {
-  const attempts = [];
-
-  if (apiKey) {
-    attempts.push({
-      label: `feeds sensor ${sensorId} (channel api_key)`,
-      params: { api_key: apiKey },
-      source: "api_feed_channel_key",
-    });
-  }
-
-  if (accountKey) {
-    attempts.push({
-      label: `feeds sensor ${sensorId} (account_key)`,
-      params: { account_key: accountKey },
-      source: "api_feed_account_key",
-    });
-  }
-
-  if (attempts.length === 0) {
-    return { ok: false, status: 0, feeds: [], source: null };
-  }
-
-  let lastStatus = 0;
-  let accountKeyDenied = false;
-
-  for (const attempt of attempts) {
-    const params = new URLSearchParams();
-    params.set("results", String(feedsResultsLimit));
-
-    Object.entries(attempt.params).forEach(([key, value]) => {
-      if (value) {
-        params.set(key, value);
-      }
-    });
-
-    const result = await fetchJsonWithRetry(
-      `https://webapi.ubibot.com/channels/${sensorId}/feeds.json?${params.toString()}`,
-      {
-        label: attempt.label,
-        timeoutMs: requestTimeoutMs,
-        enableRetry,
-        deadlineAt,
-      }
-    );
-
-    if (!result.ok) {
-      lastStatus = result.status || lastStatus;
-
-      const usedAccountKey = Boolean(attempt.params?.account_key);
-      if (usedAccountKey && result.status === 401) {
-        accountKeyDenied = true;
-      }
-
-      continue;
-    }
-
-    const payload = result.payload || {};
-    const feeds = payload.feeds || [];
-
-    if (feeds.length > 0) {
-      return {
-        ok: true,
-        status: result.status,
-        feeds,
-        source: attempt.source,
-      };
-    }
-  }
-
-  return {
-    ok: false,
-    status: lastStatus,
-    feeds: [],
-    source: null,
-    accountKeyDenied,
-  };
+  await upsertSensorCheckpoints(rows);
 }
 
 async function getDuePendingSensorIds() {
@@ -719,6 +770,18 @@ async function runUbiBotSyncUnlocked(options = {}) {
     options.feedsResultsLimit,
     FEEDS_RESULTS_LIMIT
   );
+  const checkpointOverlapMinutes = parsePositiveInt(
+    options.checkpointOverlapMinutes,
+    UBIBOT_SYNC_CHECKPOINT_OVERLAP_MINUTES
+  );
+  const feedsSampleMinutes = parsePositiveInt(
+    options.feedsSampleMinutes,
+    UBIBOT_FEEDS_SAMPLE_MINUTES
+  );
+  const minFeedsResults = parsePositiveInt(
+    options.minFeedsResults,
+    UBIBOT_SYNC_MIN_FEEDS_RESULTS
+  );
   const pendingQuotaShare = clamp01(
     options.pendingQuotaShare,
     clamp01(process.env.CRON_PENDING_QUOTA_SHARE, DEFAULT_PENDING_QUOTA_SHARE)
@@ -731,8 +794,6 @@ async function runUbiBotSyncUnlocked(options = {}) {
     options.minChannelBudgetMs,
     Math.max(2500, requestTimeoutMs + 1800)
   );
-  const skipSummaryFallbackOnFeedFailure =
-    options.skipSummaryFallbackOnFeedFailure === true;
   const enableRetry =
     typeof options.enableRetry === "boolean" ? options.enableRetry : UBIBOT_ENABLE_RETRY;
   const skipSeriesOnLowBudget = options.skipSeriesOnLowBudget === true;
@@ -746,8 +807,6 @@ async function runUbiBotSyncUnlocked(options = {}) {
   if (!accountKey) {
     throw new Error("UBIBOT_ACCOUNT_KEY o NEXT_PUBLIC_UBIBOT_KEY no esta configurada.");
   }
-
-  const channelApiKeys = parseJsonEnv(process.env.UBIBOT_CHANNEL_API_KEYS_JSON);
 
   const channelsResult = await fetchJsonWithRetry(
     `https://webapi.ubibot.com/channels?account_key=${accountKey}`,
@@ -850,6 +909,11 @@ async function runUbiBotSyncUnlocked(options = {}) {
     if (!Number.isFinite(sensorId)) return count;
     return duePendingSet.has(sensorId) ? count + 1 : count;
   }, 0);
+
+  const effectiveSensorIds = effectiveChannelsToProcess
+    .map((channel) => Number(channel.channel_id))
+    .filter((sensorId) => Number.isFinite(sensorId));
+  const checkpointBySensor = await getSensorCheckpointMap(effectiveSensorIds);
 
   let totalInserted = 0;
   let syncedChannels = 0;
@@ -969,44 +1033,39 @@ async function runUbiBotSyncUnlocked(options = {}) {
         continue;
       }
 
-      const apiKeyForChannel = channelApiKeys[String(sensorId)] || null;
-      const feedsPayload =
-        accountKeyFeedsDeniedMode && !apiKeyForChannel
-          ? {
-              ok: false,
-              status: 401,
-              feeds: [],
-              source: null,
-              accountKeyDenied: true,
-            }
-          : await fetchFeedsSeries({
-              sensorId,
-              apiKey: apiKeyForChannel,
-              accountKey,
-              feedsResultsLimit,
-              requestTimeoutMs,
-              enableRetry,
-              deadlineAt,
-            });
-
-      if (!feedsPayload.ok) {
-        if (feedsPayload.status === 429) {
-          rateLimitHits += 1;
+      const sensorSeriesLimit = deriveIncrementalFeedsResultsLimit({
+        defaultLimit: feedsResultsLimit,
+        checkpointObservedAt: checkpointBySensor.get(sensorId),
+        overlapMinutes: checkpointOverlapMinutes,
+        sampleMinutes: feedsSampleMinutes,
+        minResults: minFeedsResults,
+      });
+      const summaryResult = await fetchJsonWithRetry(
+        `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
+        {
+          label: `summary sensor ${sensorId}`,
+          timeoutMs: requestTimeoutMs,
+          enableRetry,
+          deadlineAt,
         }
+      );
 
-        if (feedsPayload.status === 408) {
-          requestTimeoutHits += 1;
-        }
+      if (!summaryResult.ok && summaryResult.status === 429) {
+        rateLimitHits += 1;
+      }
 
-        if (feedsPayload.status === 401 && feedsPayload.accountKeyDenied) {
-          feedsPermissionDeniedHits += 1;
-          accountKeyFeedsDeniedMode = true;
-        }
+      if (!summaryResult.ok && summaryResult.status === 408) {
+        requestTimeoutHits += 1;
+      }
+
+      if (!summaryResult.ok && summaryResult.status === 401) {
+        accountKeyFeedsDeniedMode = true;
+        feedsPermissionDeniedHits += 1;
       }
 
       if (rateLimitHits >= rateLimitBreakThreshold) {
         circuitBroken = true;
-        await markPendingSensorFailure(sensorId, "feeds_rate_limit_break");
+        await markPendingSensorFailure(sensorId, "summary_rate_limit_break");
         failedChannels += 1;
         failedSensorIds.push(sensorId);
 
@@ -1023,85 +1082,34 @@ async function runUbiBotSyncUnlocked(options = {}) {
         break;
       }
 
-      let readings = [];
-      let sourceForSeries = "api_summary";
-      let seriesFetchSucceeded = false;
-
-      if (feedsPayload.ok && feedsPayload.feeds.length > 0) {
-        readings = feedsPayload.feeds
-          .map((feed) => mapFeedRecord(sensorId, feed, { isCarroDeParo }))
-          .filter(Boolean);
-        sourceForSeries = feedsPayload.source || "api_feed";
-        seriesFetchSucceeded = true;
-      } else {
-        const allowSummaryFallbackFor401 =
-          feedsPayload.status === 401 && feedsPayload.accountKeyDenied;
-
-        if (
-          skipSummaryFallbackOnFeedFailure &&
-          feedsPayload.status > 0 &&
-          !allowSummaryFallbackFor401
-        ) {
-          failedChannels += 1;
-          failedSensorIds.push(sensorId);
-          await markPendingSensorFailure(sensorId, `feeds_status_${feedsPayload.status}`);
-          if (!duePendingSet.has(sensorId)) {
-            processedBaseChannels += 1;
-          }
-          continue;
+      if (!summaryResult.ok) {
+        failedChannels += 1;
+        failedSensorIds.push(sensorId);
+        await markPendingSensorFailure(sensorId, `summary_status_${summaryResult.status || 0}`);
+        if (!duePendingSet.has(sensorId)) {
+          processedBaseChannels += 1;
         }
-
-        if (Number.isFinite(deadlineAt) && getRemainingMs(deadlineAt) <= requestTimeoutMs + 900) {
-          deferredSeriesChannels += 1;
-          await deferPendingSensor(sensorId, "deferred_before_summary_low_budget");
-          syncedChannels += 1;
-          if (!duePendingSet.has(sensorId)) {
-            processedBaseChannels += 1;
-          }
-          continue;
-        }
-
-        const summaryResult = await fetchJsonWithRetry(
-          `https://webapi.ubibot.com/channels/${sensorId}/summary.json?account_key=${accountKey}`,
-          {
-            label: `summary sensor ${sensorId}`,
-            timeoutMs: requestTimeoutMs,
-            enableRetry,
-            deadlineAt,
-          }
-        );
-
-        if (!summaryResult.ok && summaryResult.status === 429) {
-          rateLimitHits += 1;
-        }
-
-        if (!summaryResult.ok && summaryResult.status === 408) {
-          requestTimeoutHits += 1;
-        }
-
-        if (!summaryResult.ok) {
-          failedChannels += 1;
-          failedSensorIds.push(sensorId);
-          await markPendingSensorFailure(sensorId, `summary_status_${summaryResult.status || 0}`);
-          continue;
-        }
-
-        const summaryPayload = summaryResult.payload || {};
-        const feeds = summaryPayload.feeds || [];
-        readings = feeds
-          .map((feed) => mapFeedRecord(sensorId, feed, { isCarroDeParo }))
-          .filter(Boolean);
-        seriesFetchSucceeded = true;
+        continue;
       }
+
+      const summaryPayload = summaryResult.payload || {};
+      const feeds = summaryPayload.feeds || [];
+      const readings = filterSummaryReadingsForCheckpoint({
+        rows: feeds
+          .map((feed) => mapFeedRecord(sensorId, feed, { isCarroDeParo }))
+          .filter(Boolean),
+        checkpointObservedAt: checkpointBySensor.get(sensorId),
+        overlapMinutes: checkpointOverlapMinutes,
+        maxRows: sensorSeriesLimit,
+      });
+      const sourceForSeries = "api_summary";
 
       for (const batch of chunk(readings, BATCH_SIZE)) {
         await upsertReadings(batch, sourceForSeries);
         totalInserted += batch.length;
       }
 
-      if (seriesFetchSucceeded) {
-        await clearPendingSensor(sensorId);
-      }
+      await clearPendingSensor(sensorId);
 
       syncedChannels += 1;
       if (!duePendingSet.has(sensorId)) {

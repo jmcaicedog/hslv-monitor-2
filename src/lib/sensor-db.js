@@ -2,7 +2,7 @@ import { query, withDbClient } from "./db.js";
 import { ensureAlertRuntimeSchema } from "./alerts.js";
 
 let schemaEnsured = false;
-const SENSOR_SCHEMA_VERSION = 8;
+const SENSOR_SCHEMA_VERSION = 9;
 const SENSOR_SCHEMA_STATE_KEY = "sensor_schema_version";
 const SENSOR_SCHEMA_LOCK_KEY_A = 240513;
 const SENSOR_SCHEMA_LOCK_KEY_B = 99872;
@@ -267,6 +267,19 @@ export async function ensureSensorSchema() {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_sync_run_metrics_created_at
           ON sync_run_metrics(created_at DESC);
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sensor_sync_checkpoint (
+          sensor_id BIGINT PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
+          last_observed_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_sensor_sync_checkpoint_updated_at
+          ON sensor_sync_checkpoint(updated_at DESC);
       `);
 
       await client.query(

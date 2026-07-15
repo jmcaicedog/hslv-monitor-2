@@ -119,9 +119,11 @@ Arquitectura objetivo:
 
 1. `DATABASE_URL`: conexion a PostgreSQL en Neon.
 2. `UBIBOT_ACCOUNT_KEY`: clave de Ubibot para sincronizacion periodica.
-3. `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional): mapa JSON de `channel_id -> api_key` para priorizar `/feeds` por canal cuando exista una llave dedicada.
-4. `CRON_SECRET`: secreto para proteger el endpoint `/api/cron/sync`.
-5. `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional): cantidad de lecturas historicas por canal a solicitar en `/feeds` (default: `2016`, cubre aprox. 7 dias si el sensor reporta cada 5 minutos).
+3. `CRON_SECRET`: secreto para proteger el endpoint `/api/cron/sync`.
+4. `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional): limite maximo de lecturas por sensor para procesar en una corrida (default: `2016`).
+5. `UBIBOT_SYNC_CHECKPOINT_OVERLAP_MINUTES` (opcional): ventana de solape para procesar incrementalmente por sensor (default: `30`).
+6. `UBIBOT_FEEDS_SAMPLE_MINUTES` (opcional): muestreo estimado por sensor para dimensionar ventana incremental (default: `5`).
+7. `UBIBOT_SYNC_MIN_FEEDS_RESULTS` (opcional): minimo de lecturas por sensor por corrida incremental (default: `24`).
 
 ### Inicializacion de base de datos
 
@@ -139,8 +141,8 @@ Este comando actualiza catalogo de sensores y agrega/actualiza lecturas reciente
 
 Notas de sincronizacion Ubibot:
 - Si solo usas `UBIBOT_ACCOUNT_KEY`, algunos canales pueden devolver datos parciales en `/summary` (por ejemplo solo `field4`).
-- El script intenta `/feeds` con `account_key`; si existe `api_key` por canal, la prioriza para ese sensor.
-- Si `/feeds` no devuelve lecturas, hace fallback a `/summary`.
+- La sincronizacion usa `summary` como fuente principal para todos los sensores.
+- El procesamiento es incremental por sensor usando `sensor_sync_checkpoint` + ventana de solape.
 
 ### Cron externo (recomendado)
 
@@ -155,10 +157,12 @@ Si recibes `401 Unauthorized`, revisa que el valor del header coincida exactamen
 Variables que debes configurar en Vercel:
 - `DATABASE_URL`
 - `UBIBOT_ACCOUNT_KEY`
-- `UBIBOT_CHANNEL_API_KEYS_JSON` (opcional)
 - `CRON_SECRET`
 - `CRON_MAX_CHANNELS_PER_RUN` (opcional, recomendado: `4` durante estabilizacion; luego subir gradualmente)
 - `UBIBOT_FEEDS_RESULTS_LIMIT` (opcional, recomendado inicial: `2016`)
+- `UBIBOT_SYNC_CHECKPOINT_OVERLAP_MINUTES` (opcional, recomendado: `30`)
+- `UBIBOT_FEEDS_SAMPLE_MINUTES` (opcional, recomendado: `5`)
+- `UBIBOT_SYNC_MIN_FEEDS_RESULTS` (opcional, recomendado: `24`)
 - `CRON_SOFT_TIMEOUT_MS` (opcional, recomendado: `15000`)
 - `UBIBOT_SYNC_REQUEST_TIMEOUT_MS` (opcional, recomendado: `3500`)
 - `CRON_FEEDS_RESULTS_LIMIT` (opcional, recomendado: `144`)
@@ -184,7 +188,7 @@ Observabilidad y concurrencia del cron:
 - Si una corrida detecta otra sincronizacion activa (lock advisory), responde `202` con `lockSkipped=true` para evitar solapamiento.
 - Si Ubibot acumula respuestas `429` en una corrida, se activa circuit breaker y el resto de canales se difiere para el siguiente ciclo.
 - Si el endpoint se acerca al timeout externo del scheduler, responde `202` anticipadamente para evitar `Failed (timeout)`.
-- Si `feeds` devuelve `401` con `account_key`, la corrida cambia a modo summary-first para ese run y evita repetir fallos por permisos.
+- Si `summary` devuelve `401`, la corrida registra el fallo del sensor y lo agenda para reintento con backoff.
 
 ### Operacion sugerida
 

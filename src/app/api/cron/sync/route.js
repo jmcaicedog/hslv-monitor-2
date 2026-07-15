@@ -101,7 +101,6 @@ export async function GET(request) {
       rateLimitBreakThreshold,
       enableRetry,
       skipSeriesOnLowBudget: true,
-      skipSummaryFallbackOnFeedFailure: true,
     }).catch((error) => ({ __syncError: error }));
 
     const raceResult = await Promise.race([
