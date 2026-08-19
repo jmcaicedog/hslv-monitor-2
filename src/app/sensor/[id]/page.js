@@ -33,6 +33,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
   ReferenceDot,
+  ReferenceLine,
 } from "recharts";
 
 const calculateMinMax = (data, key) => {
@@ -371,6 +372,35 @@ function getGranularityLabel(granularity) {
     case "hour":
     default:
       return "Fecha / hora";
+  }
+}
+
+function getMetricThresholdRange(metricKey, threshold) {
+  if (!threshold || typeof threshold !== "object") {
+    return { min: null, max: null };
+  }
+
+  const asFinite = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  switch (metricKey) {
+    case "temperatura":
+      return { min: asFinite(threshold.tempMin), max: asFinite(threshold.tempMax) };
+    case "humedad":
+      return { min: asFinite(threshold.humMin), max: asFinite(threshold.humMax) };
+    case "voltaje":
+      return { min: asFinite(threshold.voltMin), max: null };
+    case "presion":
+      return {
+        min: asFinite(threshold.pressureMin),
+        max: asFinite(threshold.pressureMax),
+      };
+    case "luz":
+      return { min: asFinite(threshold.lightMin), max: asFinite(threshold.lightMax) };
+    default:
+      return { min: null, max: null };
   }
 }
 
@@ -1669,6 +1699,46 @@ const SensorDetail = () => {
                       formatter={(value, name) => [formatTooltipValue(value, name), name]}
                     />
                     <CartesianGrid strokeDasharray="3 3" />
+
+                    {(() => {
+                      const threshold = getMetricThresholdRange(key, alarmState?.threshold);
+
+                      return (
+                        <>
+                          {Number.isFinite(threshold.min) ? (
+                            <ReferenceLine
+                              y={threshold.min}
+                              stroke="#dc2626"
+                              strokeDasharray="6 4"
+                              strokeWidth={1.5}
+                              ifOverflow="extendDomain"
+                              label={{
+                                value: `Min conf: ${threshold.min.toFixed(2)} ${unitMap[key] || ""}`,
+                                position: "insideTopLeft",
+                                fill: "#b91c1c",
+                                fontSize: 11,
+                              }}
+                            />
+                          ) : null}
+
+                          {Number.isFinite(threshold.max) ? (
+                            <ReferenceLine
+                              y={threshold.max}
+                              stroke="#15803d"
+                              strokeDasharray="6 4"
+                              strokeWidth={1.5}
+                              ifOverflow="extendDomain"
+                              label={{
+                                value: `Max conf: ${threshold.max.toFixed(2)} ${unitMap[key] || ""}`,
+                                position: "insideTopRight",
+                                fill: "#166534",
+                                fontSize: 11,
+                              }}
+                            />
+                          ) : null}
+                        </>
+                      );
+                    })()}
 
                     <Line
                       type="monotone"

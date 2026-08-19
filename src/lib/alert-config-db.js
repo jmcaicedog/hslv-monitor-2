@@ -471,6 +471,83 @@ export async function getSensorAlertThresholds() {
   return rows.map(mapSensorThresholdRow);
 }
 
+export async function getSensorAlertThresholdById(sensorId) {
+  await ensureAlertConfigSchema();
+  await ensureSensorThresholdRows();
+
+  const sensorIdNumber = Number(sensorId);
+  if (!Number.isFinite(sensorIdNumber)) {
+    return null;
+  }
+
+  const { rows } = await query(
+    `
+      SELECT
+        s.id AS sensor_id,
+        COALESCE(NULLIF(s.title, ''), 'Sensor ' || s.id::text) AS sensor_name,
+        sat.temp_min,
+        sat.temp_max,
+        sat.hum_min,
+        sat.hum_max,
+        sat.volt_min,
+        sat.pressure_min,
+        sat.pressure_max,
+        sat.light_min,
+        sat.light_max,
+        (
+          COALESCE(sm.has_pressure, FALSE)
+          OR (
+            COALESCE(
+              NULLIF(BTRIM(s.last_payload -> 'field9' ->> 'value'), ''),
+              NULLIF(BTRIM(s.last_payload ->> 'field9'), '')
+            ) IS NOT NULL
+            AND LOWER(
+              COALESCE(
+                NULLIF(BTRIM(s.last_payload -> 'field9' ->> 'value'), ''),
+                NULLIF(BTRIM(s.last_payload ->> 'field9'), '')
+              )
+            ) <> 'null'
+          )
+        ) AS has_pressure,
+        (
+          COALESCE(sm.has_light, FALSE)
+          OR (
+            COALESCE(
+              NULLIF(BTRIM(s.last_payload -> 'field6' ->> 'value'), ''),
+              NULLIF(BTRIM(s.last_payload ->> 'field6'), '')
+            ) IS NOT NULL
+            AND LOWER(
+              COALESCE(
+                NULLIF(BTRIM(s.last_payload -> 'field6' ->> 'value'), ''),
+                NULLIF(BTRIM(s.last_payload ->> 'field6'), '')
+              )
+            ) <> 'null'
+          )
+        ) AS has_light,
+        sat.enabled,
+        sat.updated_at
+      FROM sensors s
+      INNER JOIN sensor_alert_thresholds sat ON sat.sensor_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT
+          BOOL_OR(sr.presion IS NOT NULL) AS has_pressure,
+          BOOL_OR(sr.luz IS NOT NULL) AS has_light
+        FROM sensor_readings sr
+        WHERE sr.sensor_id = s.id
+      ) sm ON TRUE
+      WHERE s.id = $1
+      LIMIT 1;
+    `,
+    [sensorIdNumber]
+  );
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return mapSensorThresholdRow(rows[0]);
+}
+
 export async function updateSensorAlertThresholds(payload = {}) {
   await ensureAlertConfigSchema();
 

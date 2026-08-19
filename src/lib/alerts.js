@@ -1,5 +1,9 @@
 import { query } from "./db.js";
-import { getAlertConfig, getSensorAlertThresholds } from "./alert-config-db.js";
+import {
+  getAlertConfig,
+  getSensorAlertThresholdById,
+  getSensorAlertThresholds,
+} from "./alert-config-db.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -165,6 +169,7 @@ async function upsertSensorAlarmState(sensorId, triggeredMetrics) {
 
 export async function getSensorAlarmState(sensorId) {
   await ensureAlertRuntimeSchema();
+  const sensorThreshold = await getSensorAlertThresholdById(sensorId);
 
   const { rows } = await query(
     `
@@ -192,6 +197,7 @@ export async function getSensorAlarmState(sensorId) {
       silenced: false,
       hasActiveAlarm: false,
       activeMetrics: [],
+      threshold: sensorThreshold,
       triggeredAt: null,
       silencedAt: null,
       silencedBy: null,
@@ -210,6 +216,7 @@ export async function getSensorAlarmState(sensorId) {
     silenced,
     hasActiveAlarm: activeAlarm && !silenced,
     activeMetrics: Array.isArray(row.active_metrics) ? row.active_metrics : [],
+    threshold: sensorThreshold,
     triggeredAt: row.triggered_at,
     silencedAt: row.silenced_at,
     silencedBy: row.silenced_by,
