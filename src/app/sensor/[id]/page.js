@@ -1,5 +1,10 @@
 "use client";
-import { attendSensorAlarm, fetchSensorAlarmState, fetchSensorReadings } from "@/utils/api";
+import {
+  attendSensorAlarm,
+  fetchCurrentUser,
+  fetchSensorAlarmState,
+  fetchSensorReadings,
+} from "@/utils/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -768,6 +773,7 @@ const SensorDetail = () => {
   const id = params?.id;
   const [filteredData, setFilteredData] = useState([]);
   const [sensorName, setSensorName] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("");
   const [timeRange, setTimeRange] = useState(24);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [startDate, setStartDate] = useState("");
@@ -839,7 +845,7 @@ const SensorDetail = () => {
       setError("");
 
       try {
-        const [payload, alarmPayload] = await Promise.all([
+        const [payload, alarmPayload, me] = await Promise.all([
           fetchSensorReadings(id, {
             startDate: hasCustomRange ? appliedStartDate : undefined,
             endDate: hasCustomRange ? appliedEndDate : undefined,
@@ -847,10 +853,12 @@ const SensorDetail = () => {
             hours: hasCustomRange || selectedMonth ? undefined : timeRange,
           }),
           fetchSensorAlarmState(id).catch(() => ({ alarm: null })),
+          fetchCurrentUser().catch(() => null),
         ]);
 
         setSensorName(payload.sensorName || id);
         setAlarmState(alarmPayload?.alarm || null);
+        setCurrentUserName(me?.user?.name || me?.user?.email || "");
 
         const firstDate = payload.firstObservedAt
           ? new Date(payload.firstObservedAt).toISOString().slice(0, 10)
@@ -1130,6 +1138,7 @@ const SensorDetail = () => {
 
       const generatedAt = new Date().toLocaleString("es-ES");
       const sensorTitle = sensorName || String(id || "Sensor");
+      const generatedBy = currentUserName || "Usuario no disponible";
 
       const drawReportHeader = (instance) => {
       instance.setTextColor(20, 20, 20);
@@ -1140,16 +1149,17 @@ const SensorDetail = () => {
       instance.setFont("helvetica", "normal");
       instance.setFontSize(10);
       instance.text(reportRangeLabel, 10, 20);
-      instance.text(`Generado: ${generatedAt}`, 10, 25);
+      instance.text(`Usuario: ${generatedBy}`, 10, 25);
+      instance.text(`Generado: ${generatedAt}`, 10, 30);
 
       instance.setDrawColor(200, 200, 200);
-      instance.line(10, 28, 200, 28);
+      instance.line(10, 33, 200, 33);
     };
 
       drawReportHeader(doc);
 
       const chartElements = document.querySelectorAll(".sensor-chart");
-      let yOffset = 32;
+      let yOffset = 37;
 
       const captureScale = 1;
 
@@ -1204,7 +1214,7 @@ const SensorDetail = () => {
           unit: unitMap[key] || "",
           firstColumnLabel: getGranularityLabel(effectiveTableGranularity),
           startY: yOffset,
-          topMargin: 32,
+          topMargin: 37,
           marginLeft: 10,
           marginRight: 10,
           marginBottom: 10,
@@ -1266,9 +1276,11 @@ const SensorDetail = () => {
 
     const generatedAt = new Date().toLocaleString("es-ES");
     const sensorTitle = sensorName || String(id || "Sensor");
+    const generatedBy = currentUserName || "Usuario no disponible";
 
     const lines = [];
     lines.push(`Sensor;${escapeCsvCell(sensorTitle)}`);
+    lines.push(`Usuario;${escapeCsvCell(generatedBy)}`);
     lines.push(`Rango;${escapeCsvCell(reportRangeLabel)}`);
     lines.push(`Generado;${escapeCsvCell(generatedAt)}`);
     lines.push("");
@@ -1345,7 +1357,12 @@ const SensorDetail = () => {
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">{sensorName || id}</h1>
+        <div className="flex items-center gap-4 flex-wrap">
+          <h1 className="text-2xl font-bold">{sensorName || id}</h1>
+          <span className="rounded-full border border-gray-300 bg-white px-3 py-1 text-sm font-medium text-gray-700">
+            Usuario: {currentUserName || "No disponible"}
+          </span>
+        </div>
         <div className="flex gap-4">
           <button
             className="p-2 bg-gray-200 rounded-full hover:bg-gray-300"
