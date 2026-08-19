@@ -337,15 +337,15 @@ function buildMetricRows(data, granularity) {
         metricBuckets[key][bucketLabel] = {
           label: bucketLabel,
           sortKey: timestamp,
-          min: value,
-          max: value,
+          value,
         };
         return;
       }
 
       metricBuckets[key][bucketLabel].sortKey = Math.min(metricBuckets[key][bucketLabel].sortKey, timestamp);
-      metricBuckets[key][bucketLabel].min = Math.min(metricBuckets[key][bucketLabel].min, value);
-      metricBuckets[key][bucketLabel].max = Math.max(metricBuckets[key][bucketLabel].max, value);
+
+      // Conserva un valor puntual por bloque: la ultima lectura observada dentro del bucket.
+      metricBuckets[key][bucketLabel].value = value;
     });
   });
 
@@ -367,6 +367,21 @@ function getGranularityLabel(granularity) {
     default:
       return "Fecha / hora";
   }
+}
+
+function calculateTableSummary(rows) {
+  const numericValues = rows
+    .map((row) => Number(row?.value))
+    .filter((value) => Number.isFinite(value));
+
+  if (numericValues.length === 0) {
+    return { min: null, max: null };
+  }
+
+  return {
+    min: Math.min(...numericValues),
+    max: Math.max(...numericValues),
+  };
 }
 
 function resolveAutoGranularity({ timeRange, selectedMonth, startDate, endDate }) {
@@ -653,6 +668,8 @@ function addCanvasAsBlock(doc, canvas, options = {}) {
 function drawPdfMetricTable(doc, {
   metricTitle,
   rows,
+  summary,
+  unit,
   firstColumnLabel = "Fecha / hora",
   startY,
   topMargin,
@@ -664,9 +681,12 @@ function drawPdfMetricTable(doc, {
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const contentWidth = pageWidth - marginLeft - marginRight;
-  const colWidths = [contentWidth * 0.34, contentWidth * 0.33, contentWidth * 0.33];
+  const colWidths = [contentWidth * 0.6, contentWidth * 0.4];
   const rowHeight = 6;
   const sectionGap = 4;
+  const formatSummaryValue = (value) => (
+    Number.isFinite(value) ? `${Number(value).toFixed(2)}${unit ? ` ${unit}` : ""}` : "--"
+  );
 
   let y = startY;
 
@@ -688,28 +708,30 @@ function drawPdfMetricTable(doc, {
     doc.text(metricTitle, marginLeft + contentWidth / 2, y, { align: "center" });
     y += 4;
 
+    doc.setFontSize(8);
+    doc.text(
+      `Min: ${formatSummaryValue(summary?.min)}   Max: ${formatSummaryValue(summary?.max)}`,
+      marginLeft + contentWidth / 2,
+      y,
+      { align: "center" }
+    );
+    y += 4;
+
     doc.setFillColor(243, 244, 246);
     doc.rect(marginLeft, y, contentWidth, rowHeight, "F");
     doc.rect(marginLeft, y, contentWidth, rowHeight);
 
     doc.setFontSize(9);
     doc.text(firstColumnLabel, marginLeft + 2, y + 4);
-    doc.text("Minimo", marginLeft + colWidths[0] + 2, y + 4);
-    doc.text("Maximo", marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
+    doc.text("Valor", marginLeft + colWidths[0] + 2, y + 4);
 
     doc.line(marginLeft + colWidths[0], y, marginLeft + colWidths[0], y + rowHeight);
-    doc.line(
-      marginLeft + colWidths[0] + colWidths[1],
-      y,
-      marginLeft + colWidths[0] + colWidths[1],
-      y + rowHeight
-    );
 
     y += rowHeight;
     doc.setFont("helvetica", "normal");
   };
 
-  ensureSpace(16);
+  ensureSpace(20);
   drawTableHeader();
 
   for (const row of rows) {
@@ -719,19 +741,20 @@ function drawPdfMetricTable(doc, {
       drawTableHeader();
     }
 
+    const isMinRow = Number.isFinite(summary?.min) && Number(row.value) === Number(summary.min);
+    const isMaxRow = Number.isFinite(summary?.max) && Number(row.value) === Number(summary.max);
+
+    if (isMinRow || isMaxRow) {
+      doc.setFillColor(isMinRow ? 254 : 236, isMinRow ? 242 : 253, isMinRow ? 242 : 243);
+      doc.rect(marginLeft, y, contentWidth, rowHeight, "F");
+    }
+
     doc.rect(marginLeft, y, contentWidth, rowHeight);
     doc.line(marginLeft + colWidths[0], y, marginLeft + colWidths[0], y + rowHeight);
-    doc.line(
-      marginLeft + colWidths[0] + colWidths[1],
-      y,
-      marginLeft + colWidths[0] + colWidths[1],
-      y + rowHeight
-    );
 
     doc.setFontSize(8);
-  doc.text(String(row.label || row.date || ""), marginLeft + 2, y + 4);
-    doc.text(String(row.minText || ""), marginLeft + colWidths[0] + 2, y + 4);
-    doc.text(String(row.maxText || ""), marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
+    doc.text(String(row.label || row.date || ""), marginLeft + 2, y + 4);
+    doc.text(String(row.valueText || ""), marginLeft + colWidths[0] + 2, y + 4);
 
     y += rowHeight;
   }
@@ -922,6 +945,13 @@ const SensorDetail = () => {
   const tableRowsByMetric = useMemo(
     () => buildMetricRows(filteredData, effectiveTableGranularity),
     [filteredData, effectiveTableGranularity]
+  );
+
+  const tableSummaryByMetric = useMemo(
+    () => Object.fromEntries(
+      Object.entries(tableRowsByMetric).map(([key, rows]) => [key, calculateTableSummary(rows)])
+    ),
+    [tableRowsByMetric]
   );
 
   const normalizedJumpTarget = useMemo(
@@ -1160,6 +1190,7 @@ const SensorDetail = () => {
       await waitForNextFrame();
 
         const rows = tableRowsByMetric[key] || [];
+        const summary = tableSummaryByMetric[key] || { min: null, max: null };
 
         const metricTitle = `${getMetricLabel(key)} (${unitMap[key] || ""})`;
 
@@ -1167,9 +1198,10 @@ const SensorDetail = () => {
           metricTitle,
           rows: rows.map((row) => ({
             ...row,
-            minText: Number.isFinite(row.min) ? `${row.min.toFixed(2)} (${unitMap[key] || ""})` : "",
-            maxText: Number.isFinite(row.max) ? `${row.max.toFixed(2)} (${unitMap[key] || ""})` : "",
+            valueText: Number.isFinite(row.value) ? `${row.value.toFixed(2)} (${unitMap[key] || ""})` : "",
           })),
+          summary,
+          unit: unitMap[key] || "",
           firstColumnLabel: getGranularityLabel(effectiveTableGranularity),
           startY: yOffset,
           topMargin: 32,
@@ -1262,17 +1294,18 @@ const SensorDetail = () => {
       }
 
       const metricName = `${key.charAt(0).toUpperCase() + key.slice(1)}${unit ? ` (${unit})` : ""}`;
+      const summary = tableSummaryByMetric[key] || { min: null, max: null };
       lines.push(`Variable;${escapeCsvCell(metricName)}`);
-      lines.push(`${escapeCsvCell(getGranularityLabel(effectiveTableGranularity))};Minimo;Maximo`);
+      lines.push(`Minimo global;${escapeCsvCell(Number.isFinite(summary.min) ? summary.min.toFixed(2) : "")}`);
+      lines.push(`Maximo global;${escapeCsvCell(Number.isFinite(summary.max) ? summary.max.toFixed(2) : "")}`);
+      lines.push(`${escapeCsvCell(getGranularityLabel(effectiveTableGranularity))};Valor`);
 
       rows.forEach((row) => {
-        const min = Number(row?.min);
-        const max = Number(row?.max);
+        const value = Number(row?.value);
         lines.push(
           [
             escapeCsvCell(row.label || ""),
-            escapeCsvCell(Number.isFinite(min) ? min.toFixed(2) : ""),
-            escapeCsvCell(Number.isFinite(max) ? max.toFixed(2) : ""),
+            escapeCsvCell(Number.isFinite(value) ? value.toFixed(2) : ""),
           ].join(";")
         );
       });
@@ -1673,6 +1706,7 @@ const SensorDetail = () => {
       <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
         {orderedMetricKeys.map((key) => {
           const rows = tableRowsByMetric[key] || [];
+          const summary = tableSummaryByMetric[key] || { min: null, max: null };
           const totalPages = Math.max(1, Math.ceil(rows.length / tableRowsPerPage));
           const currentPage = Math.min(
             totalPages,
@@ -1690,33 +1724,48 @@ const SensorDetail = () => {
               key={key}
               className="bg-white shadow-md rounded-lg p-4 border border-gray-300 data-table"
             >
-              <h2 className="text-lg text-center font-semibold flex items-center justify-center gap-2">
-                {getMetricIcon(key)}
-                <span>{getMetricLabel(key)} ({unitMap[key]})</span>
-              </h2>
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <h2 className="text-lg text-center font-semibold flex items-center justify-center gap-2 md:text-left">
+                  {getMetricIcon(key)}
+                  <span>{getMetricLabel(key)} ({unitMap[key]})</span>
+                </h2>
+                <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-semibold md:justify-end">
+                  <span className="rounded-full bg-red-50 px-3 py-1 text-red-700 border border-red-200">
+                    Min: {Number.isFinite(summary.min) ? summary.min.toFixed(2) : "--"} ({unitMap[key]})
+                  </span>
+                  <span className="rounded-full bg-green-50 px-3 py-1 text-green-700 border border-green-200">
+                    Max: {Number.isFinite(summary.max) ? summary.max.toFixed(2) : "--"} ({unitMap[key]})
+                  </span>
+                </div>
+              </div>
               <table className="w-full mt-4 border-collapse border border-gray-300">
                 <thead>
                   <tr className="bg-gray-100">
                     <th className="border border-gray-300 p-2">{firstColumnLabel}</th>
-                    <th className="border border-gray-300 p-2">Mínimo</th>
-                    <th className="border border-gray-300 p-2">Máximo</th>
+                    <th className="border border-gray-300 p-2">Valor</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((row) => (
+                  {visibleRows.map((row) => {
+                    const isMinRow = Number.isFinite(summary.min) && Number(row.value) === Number(summary.min);
+                    const isMaxRow = Number.isFinite(summary.max) && Number(row.value) === Number(summary.max);
+
+                    return (
                     <tr
                       key={row.label}
-                      className={rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity) ? "bg-amber-50" : undefined}
+                      className={[
+                        rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity) ? "bg-amber-50" : "",
+                        isMinRow ? "bg-red-50" : "",
+                        isMaxRow ? "bg-green-50" : "",
+                      ].filter(Boolean).join(" ") || undefined}
                     >
                       <td className="border text-center border-gray-300 p-2">{row.label}</td>
-                      <td className="border text-center border-gray-300 p-2">
-                        {row.min.toFixed(2)} ({unitMap[key]})
-                      </td>
-                      <td className="border text-center border-gray-300 p-2">
-                        {row.max.toFixed(2)} ({unitMap[key]})
+                      <td className={`border text-center border-gray-300 p-2 font-medium ${isMinRow ? "text-red-700" : isMaxRow ? "text-green-700" : ""}`}>
+                        {row.value.toFixed(2)} ({unitMap[key]})
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
 
