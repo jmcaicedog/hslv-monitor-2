@@ -477,62 +477,24 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
     params = [sensorId, safeHours];
   }
 
-  const shouldAggregateCustomRange = hasCustomRange && customRangeDays > 14;
-
-  const { rows } = shouldAggregateCustomRange
-    ? await query(
-        `
-          SELECT
-            CASE
-              WHEN $4::int > 120 THEN date_trunc('day', observed_at)
-              WHEN $4::int > 45 THEN (
-                date_trunc('day', observed_at)
-                + ((EXTRACT(HOUR FROM observed_at)::int / 6) * INTERVAL '6 hour')
-              )
-              ELSE (
-                date_trunc('day', observed_at)
-                + ((EXTRACT(HOUR FROM observed_at)::int / 3) * INTERVAL '3 hour')
-              )
-            END AS observed_at,
-            AVG(temperatura) AS temperatura,
-            AVG(humedad) AS humedad,
-            AVG(temperatura_2) AS temperatura_2,
-            AVG(humedad_2) AS humedad_2,
-            AVG(voltaje) AS voltaje,
-            AVG(presion) AS presion,
-            AVG(luz) AS luz
-          FROM sensor_readings
-          WHERE sensor_id = $1
-            AND observed_at >= $2
-            AND observed_at < $3
-          GROUP BY 1
-          ORDER BY observed_at ASC;
-        `,
-        [
-          sensorId,
-          customRangeStart.toISOString(),
-          customRangeEndExclusive.toISOString(),
-          customRangeDays,
-        ]
-      )
-    : await query(
-        `
-          SELECT
-            observed_at,
-            temperatura,
-            humedad,
-            temperatura_2,
-            humedad_2,
-            voltaje,
-            presion,
-            luz
-          FROM sensor_readings
-          WHERE sensor_id = $1
-          ${whereSql}
-          ORDER BY observed_at ASC;
-        `,
-        params
-      );
+  const { rows } = await query(
+    `
+      SELECT
+        observed_at,
+        temperatura,
+        humedad,
+        temperatura_2,
+        humedad_2,
+        voltaje,
+        presion,
+        luz
+      FROM sensor_readings
+      WHERE sensor_id = $1
+      ${whereSql}
+      ORDER BY observed_at ASC;
+    `,
+    params
+  );
 
   return {
     sensorName: sensorMeta.rows[0].title,

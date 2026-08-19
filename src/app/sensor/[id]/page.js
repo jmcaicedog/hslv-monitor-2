@@ -158,19 +158,36 @@ function downsampleSeries(data, maxPoints = CHART_MAX_POINTS) {
   return sampled;
 }
 
-function formatTooltipDate(value) {
+function formatTooltipDate(value, granularity = "reading") {
   const date = new Date(Number(value));
   if (Number.isNaN(date.getTime())) {
     return String(value ?? "");
   }
 
-  return new Intl.DateTimeFormat("es-ES", {
+  if (granularity === "day") {
+    return `Dia: ${new Intl.DateTimeFormat("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date)}`;
+  }
+
+  if (granularity === "hour") {
+    return `Bloque horario: ${new Intl.DateTimeFormat("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+    }).format(date)}:00`;
+  }
+
+  return `Lectura: ${new Intl.DateTimeFormat("es-ES", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date);
+  }).format(date)}`;
 }
 
 function formatTooltipValue(value, metricKey) {
@@ -181,6 +198,247 @@ function formatTooltipValue(value, metricKey) {
 
   const unit = unitMap[metricKey] ? ` ${unitMap[metricKey]}` : "";
   return `${numeric.toFixed(2)}${unit}`;
+}
+
+function getChartMaxPoints(granularity) {
+  switch (granularity) {
+    case "day":
+      return 120;
+    case "hour":
+      return 240;
+    case "reading":
+    default:
+      return CHART_MAX_POINTS;
+  }
+}
+
+function formatChartTick(value, granularity) {
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  if (granularity === "day") {
+    return new Intl.DateTimeFormat("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  }
+
+  if (granularity === "hour") {
+    return new Intl.DateTimeFormat("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatDateTimeLocalValue(timestamp) {
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join("-") + `T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+}
+
+function formatHourLocalValue(timestamp) {
+  const dateTimeLocal = formatDateTimeLocalValue(timestamp);
+  if (!dateTimeLocal) {
+    return "";
+  }
+
+  return `${dateTimeLocal.slice(0, 13)}:00`;
+}
+
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatReadingLabel(timestamp) {
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join("-") + ` ${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+}
+
+function formatHourlyBucketLabel(timestamp) {
+  const readingLabel = formatReadingLabel(timestamp);
+  if (!readingLabel) {
+    return "";
+  }
+
+  return `${readingLabel.slice(0, 13)}:00`;
+}
+
+function formatDailyBucketLabel(timestamp) {
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join("-");
+}
+
+function buildMetricRows(data, granularity) {
+  const metricBuckets = {};
+
+  data.forEach((entry) => {
+    const timestamp = Number(entry.timestamp);
+    if (!Number.isFinite(timestamp)) {
+      return;
+    }
+
+    const bucketLabel = granularity === "day"
+      ? formatDailyBucketLabel(timestamp)
+      : granularity === "hour"
+        ? formatHourlyBucketLabel(timestamp)
+        : formatReadingLabel(timestamp);
+
+    if (!bucketLabel) {
+      return;
+    }
+
+    Object.keys(entry).forEach((key) => {
+      if (key === "timestamp") return;
+      if (!allowedMetricKeys.has(key)) return;
+
+      const value = Number.parseFloat(entry[key]);
+      if (Number.isNaN(value)) return;
+
+      if (!metricBuckets[key]) {
+        metricBuckets[key] = {};
+      }
+
+      if (!metricBuckets[key][bucketLabel]) {
+        metricBuckets[key][bucketLabel] = {
+          label: bucketLabel,
+          sortKey: timestamp,
+          min: value,
+          max: value,
+        };
+        return;
+      }
+
+      metricBuckets[key][bucketLabel].sortKey = Math.min(metricBuckets[key][bucketLabel].sortKey, timestamp);
+      metricBuckets[key][bucketLabel].min = Math.min(metricBuckets[key][bucketLabel].min, value);
+      metricBuckets[key][bucketLabel].max = Math.max(metricBuckets[key][bucketLabel].max, value);
+    });
+  });
+
+  return Object.fromEntries(
+    Object.entries(metricBuckets).map(([key, buckets]) => [
+      key,
+      Object.values(buckets).sort((a, b) => a.sortKey - b.sortKey),
+    ])
+  );
+}
+
+function getGranularityLabel(granularity) {
+  switch (granularity) {
+    case "reading":
+      return "Fecha / hora";
+    case "day":
+      return "Fecha";
+    case "hour":
+    default:
+      return "Fecha / hora";
+  }
+}
+
+function resolveAutoGranularity({ timeRange, selectedMonth, startDate, endDate }) {
+  if (selectedMonth) {
+    return "hour";
+  }
+
+  if (startDate && endDate) {
+    const start = new Date(`${startDate}T00:00:00.000Z`);
+    const end = new Date(`${endDate}T00:00:00.000Z`);
+
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      const rangeDays = Math.max(
+        1,
+        Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1
+      );
+
+      if (rangeDays <= 2) {
+        return "reading";
+      }
+
+      if (rangeDays <= 45) {
+        return "hour";
+      }
+
+      return "day";
+    }
+  }
+
+  if (Number(timeRange) <= 24) {
+    return "reading";
+  }
+
+  if (Number(timeRange) <= 720) {
+    return "hour";
+  }
+
+  return "day";
+}
+
+function rowMatchesDate(row, dateText) {
+  if (!dateText) {
+    return false;
+  }
+
+  return String(row?.label || "").startsWith(dateText);
+}
+
+function normalizeJumpValue(rawValue, granularity) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+
+  if (granularity === "day") {
+    return value.slice(0, 10);
+  }
+
+  if (granularity === "hour") {
+    return `${value.replace("T", " ").slice(0, 13)}:00`;
+  }
+
+  return value.replace("T", " ").slice(0, 16);
+}
+
+function rowMatchesJumpTarget(row, jumpTarget, granularity) {
+  if (!jumpTarget) {
+    return false;
+  }
+
+  const label = String(row?.label || "");
+  return granularity === "reading" ? label === jumpTarget : label.startsWith(jumpTarget);
 }
 
 function escapeCsvCell(value) {
@@ -395,6 +653,7 @@ function addCanvasAsBlock(doc, canvas, options = {}) {
 function drawPdfMetricTable(doc, {
   metricTitle,
   rows,
+  firstColumnLabel = "Fecha / hora",
   startY,
   topMargin,
   marginLeft,
@@ -434,7 +693,7 @@ function drawPdfMetricTable(doc, {
     doc.rect(marginLeft, y, contentWidth, rowHeight);
 
     doc.setFontSize(9);
-    doc.text("Fecha", marginLeft + 2, y + 4);
+    doc.text(firstColumnLabel, marginLeft + 2, y + 4);
     doc.text("Minimo", marginLeft + colWidths[0] + 2, y + 4);
     doc.text("Maximo", marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
 
@@ -470,7 +729,7 @@ function drawPdfMetricTable(doc, {
     );
 
     doc.setFontSize(8);
-    doc.text(String(row.date || ""), marginLeft + 2, y + 4);
+  doc.text(String(row.label || row.date || ""), marginLeft + 2, y + 4);
     doc.text(String(row.minText || ""), marginLeft + colWidths[0] + 2, y + 4);
     doc.text(String(row.maxText || ""), marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
 
@@ -500,6 +759,9 @@ const SensorDetail = () => {
   const [attendingAlarm, setAttendingAlarm] = useState(false);
   const [alarmFeedback, setAlarmFeedback] = useState("");
   const [tablePageByMetric, setTablePageByMetric] = useState({});
+  const [tableGranularityMode, setTableGranularityMode] = useState("auto");
+  const [tableRowsPerPage, setTableRowsPerPage] = useState(20);
+  const [tableJumpValue, setTableJumpValue] = useState("");
   const [pdfProgress, setPdfProgress] = useState({
     running: false,
     percent: 0,
@@ -511,7 +773,6 @@ const SensorDetail = () => {
     message: "",
   });
   const didInitDateBoundsRef = useRef(false);
-  const rowsPerTablePage = 20;
 
   useEffect(() => {
     didInitDateBoundsRef.current = false;
@@ -645,63 +906,124 @@ const SensorDetail = () => {
     }
   }
 
-  const dailyMinMax = useMemo(() => {
-    const dailyValues = {};
+  const effectiveTableGranularity = useMemo(() => {
+    if (tableGranularityMode !== "auto") {
+      return tableGranularityMode;
+    }
 
-    filteredData.forEach((entry) => {
-      const date = new Date(entry.timestamp).toISOString().split("T")[0];
-
-      Object.keys(entry).forEach((key) => {
-        if (key === "timestamp") return;
-        if (!allowedMetricKeys.has(key)) return;
-
-        const value = parseFloat(entry[key]);
-        if (Number.isNaN(value)) return;
-
-        if (!dailyValues[key]) {
-          dailyValues[key] = {};
-        }
-
-        if (!dailyValues[key][date]) {
-          dailyValues[key][date] = {
-            min: value,
-            max: value,
-          };
-        } else {
-          dailyValues[key][date].min = Math.min(dailyValues[key][date].min, value);
-          dailyValues[key][date].max = Math.max(dailyValues[key][date].max, value);
-        }
-      });
+    return resolveAutoGranularity({
+      timeRange,
+      selectedMonth,
+      startDate: appliedStartDate,
+      endDate: appliedEndDate,
     });
+  }, [tableGranularityMode, timeRange, selectedMonth, appliedStartDate, appliedEndDate]);
 
-    return dailyValues;
-  }, [filteredData]);
+  const tableRowsByMetric = useMemo(
+    () => buildMetricRows(filteredData, effectiveTableGranularity),
+    [filteredData, effectiveTableGranularity]
+  );
+
+  const normalizedJumpTarget = useMemo(
+    () => normalizeJumpValue(tableJumpValue, effectiveTableGranularity),
+    [tableJumpValue, effectiveTableGranularity]
+  );
+
+  const jumpInputType = effectiveTableGranularity === "day" ? "date" : "datetime-local";
+  const jumpInputStep = effectiveTableGranularity === "reading" ? 60 : 3600;
+
+  const latestJumpValue = useMemo(() => {
+    if (filteredData.length === 0) {
+      return "";
+    }
+
+    const latestTimestamp = filteredData[filteredData.length - 1]?.timestamp;
+
+    if (effectiveTableGranularity === "day") {
+      return formatDailyBucketLabel(latestTimestamp);
+    }
+
+    if (effectiveTableGranularity === "hour") {
+      return formatHourLocalValue(latestTimestamp);
+    }
+
+    return formatDateTimeLocalValue(latestTimestamp);
+  }, [filteredData, effectiveTableGranularity]);
+
+  const jumpInputMin = useMemo(() => {
+    if (filteredData.length === 0) {
+      return undefined;
+    }
+
+    return effectiveTableGranularity === "day"
+      ? formatDailyBucketLabel(filteredData[0]?.timestamp)
+      : formatDateTimeLocalValue(filteredData[0]?.timestamp);
+  }, [filteredData, effectiveTableGranularity]);
+
+  const jumpInputMax = useMemo(() => {
+    if (filteredData.length === 0) {
+      return undefined;
+    }
+
+    return effectiveTableGranularity === "day"
+      ? formatDailyBucketLabel(filteredData[filteredData.length - 1]?.timestamp)
+      : formatDateTimeLocalValue(filteredData[filteredData.length - 1]?.timestamp);
+  }, [filteredData, effectiveTableGranularity]);
 
   const minMaxValues = useMemo(() => {
-    return Object.keys(dailyMinMax).reduce((acc, key) => {
+    return Object.keys(tableRowsByMetric).reduce((acc, key) => {
       acc[key] = calculateMinMax(filteredData, key);
       return acc;
     }, {});
-  }, [dailyMinMax, filteredData]);
+  }, [tableRowsByMetric, filteredData]);
 
-  const orderedMetricKeys = useMemo(() => getOrderedMetricKeys(dailyMinMax), [dailyMinMax]);
+  const orderedMetricKeys = useMemo(() => getOrderedMetricKeys(tableRowsByMetric), [tableRowsByMetric]);
 
   const chartSeriesByMetric = useMemo(() => {
     const byMetric = {};
+    const chartMaxPoints = getChartMaxPoints(effectiveTableGranularity);
 
     orderedMetricKeys.forEach((key) => {
       const rawSeries = filteredData.filter(
         (d) => d[key] != null && !Number.isNaN(parseFloat(d[key]))
       );
-      byMetric[key] = downsampleSeries(rawSeries, CHART_MAX_POINTS);
+      byMetric[key] = downsampleSeries(rawSeries, chartMaxPoints);
     });
 
     return byMetric;
-  }, [filteredData, orderedMetricKeys]);
+  }, [filteredData, orderedMetricKeys, effectiveTableGranularity]);
 
   useEffect(() => {
     setTablePageByMetric({});
-  }, [dailyMinMax]);
+  }, [tableRowsByMetric, effectiveTableGranularity, tableRowsPerPage]);
+
+  useEffect(() => {
+    if (!normalizedJumpTarget) {
+      return;
+    }
+
+    setTablePageByMetric((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      Object.entries(tableRowsByMetric).forEach(([key, rows]) => {
+        const matchIndex = rows.findIndex((row) =>
+          rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity)
+        );
+        if (matchIndex === -1) {
+          return;
+        }
+
+        const targetPage = Math.floor(matchIndex / tableRowsPerPage) + 1;
+        if (next[key] !== targetPage) {
+          next[key] = targetPage;
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [normalizedJumpTarget, tableRowsByMetric, tableRowsPerPage, effectiveTableGranularity]);
 
   const reportRangeLabel = useMemo(() => {
     if (appliedStartDate && appliedEndDate) {
@@ -837,15 +1159,7 @@ const SensorDetail = () => {
       }));
       await waitForNextFrame();
 
-        const sortedDates = Object.keys(dailyMinMax[key] || {}).sort((a, b) =>
-          a.localeCompare(b)
-        );
-
-        const rows = sortedDates.map((date) => ({
-          date,
-          min: Number(dailyMinMax[key][date]?.min),
-          max: Number(dailyMinMax[key][date]?.max),
-        }));
+        const rows = tableRowsByMetric[key] || [];
 
         const metricTitle = `${getMetricLabel(key)} (${unitMap[key] || ""})`;
 
@@ -856,6 +1170,7 @@ const SensorDetail = () => {
             minText: Number.isFinite(row.min) ? `${row.min.toFixed(2)} (${unitMap[key] || ""})` : "",
             maxText: Number.isFinite(row.max) ? `${row.max.toFixed(2)} (${unitMap[key] || ""})` : "",
           })),
+          firstColumnLabel: getGranularityLabel(effectiveTableGranularity),
           startY: yOffset,
           topMargin: 32,
           marginLeft: 10,
@@ -939,25 +1254,23 @@ const SensorDetail = () => {
       await waitForNextFrame();
 
       const unit = unitMap[key] || "";
-      const dates = Object.keys(dailyMinMax[key] || {})
-        .sort((a, b) => a.localeCompare(b));
+      const rows = tableRowsByMetric[key] || [];
 
-      if (dates.length === 0) {
+      if (rows.length === 0) {
         completedSteps += 1;
         continue;
       }
 
       const metricName = `${key.charAt(0).toUpperCase() + key.slice(1)}${unit ? ` (${unit})` : ""}`;
       lines.push(`Variable;${escapeCsvCell(metricName)}`);
-      lines.push("Fecha;Minimo;Maximo");
+      lines.push(`${escapeCsvCell(getGranularityLabel(effectiveTableGranularity))};Minimo;Maximo`);
 
-      dates.forEach((date) => {
-        const row = dailyMinMax[key][date];
+      rows.forEach((row) => {
         const min = Number(row?.min);
         const max = Number(row?.max);
         lines.push(
           [
-            escapeCsvCell(date),
+            escapeCsvCell(row.label || ""),
             escapeCsvCell(Number.isFinite(min) ? min.toFixed(2) : ""),
             escapeCsvCell(Number.isFinite(max) ? max.toFixed(2) : ""),
           ].join(";")
@@ -1183,6 +1496,59 @@ const SensorDetail = () => {
             ))}
           </select>
         </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="mr-1">Tabla:</label>
+          <select
+            value={tableGranularityMode}
+            onChange={(e) => setTableGranularityMode(e.target.value)}
+            className="border p-1 rounded"
+          >
+            <option value="auto">Automatico</option>
+            <option value="reading">Lecturas exactas</option>
+            <option value="hour">Agrupado por hora</option>
+            <option value="day">Agrupado por dia</option>
+          </select>
+          <select
+            value={tableRowsPerPage}
+            onChange={(e) => setTableRowsPerPage(Number(e.target.value) || 20)}
+            className="border p-1 rounded"
+          >
+            <option value={20}>20 filas</option>
+            <option value={50}>50 filas</option>
+            <option value={100}>100 filas</option>
+          </select>
+          <input
+            type={jumpInputType}
+            value={tableJumpValue}
+            min={jumpInputMin}
+            max={jumpInputMax}
+            step={jumpInputStep}
+            onChange={(e) => setTableJumpValue(e.target.value)}
+            className="border p-1 rounded"
+            title="Ir a una fecha u hora dentro de las tablas"
+          />
+          <button
+            type="button"
+            onClick={() => setTableJumpValue(latestJumpValue)}
+            disabled={!latestJumpValue}
+            className="rounded border border-blue-300 px-3 py-1 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Ultima lectura
+          </button>
+          <button
+            type="button"
+            onClick={() => setTableJumpValue("")}
+            className="rounded border border-gray-300 px-3 py-1 hover:bg-gray-50"
+          >
+            Limpiar salto
+          </button>
+          <span className="text-xs text-gray-500">
+            {tableGranularityMode === "auto"
+              ? `Granularidad actual: ${getGranularityLabel(effectiveTableGranularity)}`
+              : ""}
+          </span>
+        </div>
       </div>
 
       {isLoading && (
@@ -1236,16 +1602,8 @@ const SensorDetail = () => {
                     <XAxis
                       dataKey="timestamp"
                       interval="preserveStartEnd"
-                      minTickGap={24}
-                      tickFormatter={(time) => {
-                        const date = new Date(time);
-                        if (isNaN(date.getTime())) return "";
-                        return new Intl.DateTimeFormat("es-ES", {
-                          day: "2-digit",
-                          month: "2-digit",
-                          year: "numeric",
-                        }).format(date);
-                      }}
+                      minTickGap={effectiveTableGranularity === "reading" ? 28 : 20}
+                      tickFormatter={(time) => formatChartTick(time, effectiveTableGranularity)}
                     />
 
                     <YAxis
@@ -1257,7 +1615,7 @@ const SensorDetail = () => {
                     />
 
                     <Tooltip
-                      labelFormatter={(label) => formatTooltipDate(label)}
+                      labelFormatter={(label) => formatTooltipDate(label, effectiveTableGranularity)}
                       formatter={(value, name) => [formatTooltipValue(value, name), name]}
                     />
                     <CartesianGrid strokeDasharray="3 3" />
@@ -1266,8 +1624,8 @@ const SensorDetail = () => {
                       type="monotone"
                       dataKey={key}
                       stroke="#8884d8"
-                      strokeWidth={2}
-                      dot={false}
+                      strokeWidth={effectiveTableGranularity === "day" ? 2.5 : 2}
+                      dot={effectiveTableGranularity === "reading" && chartData.length <= 120}
                       isAnimationActive={false}
                     />
 
@@ -1314,16 +1672,18 @@ const SensorDetail = () => {
       </div>
       <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
         {orderedMetricKeys.map((key) => {
-          const sortedDates = Object.keys(dailyMinMax[key] || {}).sort((a, b) =>
-            a.localeCompare(b)
-          );
-          const totalPages = Math.max(1, Math.ceil(sortedDates.length / rowsPerTablePage));
+          const rows = tableRowsByMetric[key] || [];
+          const totalPages = Math.max(1, Math.ceil(rows.length / tableRowsPerPage));
           const currentPage = Math.min(
             totalPages,
             Math.max(1, Number(tablePageByMetric[key] || 1))
           );
-          const startIndex = (currentPage - 1) * rowsPerTablePage;
-          const visibleDates = sortedDates.slice(startIndex, startIndex + rowsPerTablePage);
+          const startIndex = (currentPage - 1) * tableRowsPerPage;
+          const visibleRows = rows.slice(startIndex, startIndex + tableRowsPerPage);
+          const firstColumnLabel = getGranularityLabel(effectiveTableGranularity);
+          const hasDateMatch = normalizedJumpTarget
+            ? rows.some((row) => rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity))
+            : false;
 
           return (
             <div
@@ -1337,27 +1697,47 @@ const SensorDetail = () => {
               <table className="w-full mt-4 border-collapse border border-gray-300">
                 <thead>
                   <tr className="bg-gray-100">
-                    <th className="border border-gray-300 p-2">Fecha</th>
+                    <th className="border border-gray-300 p-2">{firstColumnLabel}</th>
                     <th className="border border-gray-300 p-2">Mínimo</th>
                     <th className="border border-gray-300 p-2">Máximo</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleDates.map((date) => (
-                    <tr key={date}>
-                      <td className="border text-center border-gray-300 p-2">{date}</td>
+                  {visibleRows.map((row) => (
+                    <tr
+                      key={row.label}
+                      className={rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity) ? "bg-amber-50" : undefined}
+                    >
+                      <td className="border text-center border-gray-300 p-2">{row.label}</td>
                       <td className="border text-center border-gray-300 p-2">
-                        {dailyMinMax[key][date].min.toFixed(2)} ({unitMap[key]})
+                        {row.min.toFixed(2)} ({unitMap[key]})
                       </td>
                       <td className="border text-center border-gray-300 p-2">
-                        {dailyMinMax[key][date].max.toFixed(2)} ({unitMap[key]})
+                        {row.max.toFixed(2)} ({unitMap[key]})
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
-              {sortedDates.length > rowsPerTablePage ? (
+              <div className="mt-3 flex items-center justify-between gap-2 text-sm text-gray-600">
+                <span>
+                  Mostrando {rows.length === 0 ? 0 : startIndex + 1}-{Math.min(rows.length, startIndex + visibleRows.length)} de {rows.length} filas
+                </span>
+                <span>
+                  Pagina {currentPage} de {totalPages}
+                </span>
+              </div>
+
+              {normalizedJumpTarget ? (
+                <div className="mt-2 text-xs text-gray-500">
+                  {hasDateMatch
+                    ? `Salto aplicado para ${normalizedJumpTarget}.`
+                    : `No hay filas para ${normalizedJumpTarget} en esta variable.`}
+                </div>
+              ) : null}
+
+              {rows.length > tableRowsPerPage ? (
                 <div className="mt-3 flex items-center justify-between gap-2 text-sm">
                   <button
                     type="button"
@@ -1372,9 +1752,6 @@ const SensorDetail = () => {
                   >
                     Anterior
                   </button>
-                  <span>
-                    Pagina {currentPage} de {totalPages}
-                  </span>
                   <button
                     type="button"
                     onClick={() =>
