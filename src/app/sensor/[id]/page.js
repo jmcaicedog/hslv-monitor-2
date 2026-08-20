@@ -363,6 +363,71 @@ function buildMetricRows(data, granularity) {
   );
 }
 
+function formatHourOfDayOptionLabel(hour) {
+  const reference = new Date(2000, 0, 1, hour, 0, 0);
+  return new Intl.DateTimeFormat("es-ES", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(reference);
+}
+
+const HOUR_OF_DAY_OPTIONS = Array.from({ length: 24 }, (_, hour) => ({
+  value: hour,
+  label: formatHourOfDayOptionLabel(hour),
+}));
+
+// Por cada dia toma la lectura exacta mas cercana a la hora elegida, sin promediar.
+function buildHourOfDayRows(data, hourOfDay) {
+  const metricBuckets = {};
+  const targetMinutes = hourOfDay * 60;
+
+  data.forEach((entry) => {
+    const timestamp = Number(entry.timestamp);
+    if (!Number.isFinite(timestamp)) {
+      return;
+    }
+
+    const dayLabel = formatDailyBucketLabel(timestamp);
+    if (!dayLabel) {
+      return;
+    }
+
+    const date = new Date(timestamp);
+    const minutesOfDay = date.getHours() * 60 + date.getMinutes();
+    const diff = Math.abs(minutesOfDay - targetMinutes);
+
+    Object.keys(entry).forEach((key) => {
+      if (key === "timestamp") return;
+      if (!allowedMetricKeys.has(key)) return;
+
+      const value = Number.parseFloat(entry[key]);
+      if (Number.isNaN(value)) return;
+
+      if (!metricBuckets[key]) {
+        metricBuckets[key] = {};
+      }
+
+      const current = metricBuckets[key][dayLabel];
+      if (!current || diff < current.diff) {
+        metricBuckets[key][dayLabel] = {
+          label: formatReadingLabel(timestamp),
+          sortKey: timestamp,
+          value,
+          diff,
+        };
+      }
+    });
+  });
+
+  return Object.fromEntries(
+    Object.entries(metricBuckets).map(([key, buckets]) => [
+      key,
+      Object.values(buckets).sort((a, b) => a.sortKey - b.sortKey),
+    ])
+  );
+}
+
 function getGranularityLabel(granularity) {
   switch (granularity) {
     case "reading":
@@ -848,6 +913,7 @@ const SensorDetail = () => {
   const [tableGranularityMode, setTableGranularityMode] = useState("auto");
   const [tableRowsPerPage, setTableRowsPerPage] = useState(20);
   const [tableJumpValue, setTableJumpValue] = useState("");
+  const [hourOfDayFilter, setHourOfDayFilter] = useState("");
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [pendingReportType, setPendingReportType] = useState("");
   const [reportObservations, setReportObservations] = useState("");
@@ -1010,10 +1076,17 @@ const SensorDetail = () => {
     });
   }, [tableGranularityMode, timeRange, selectedMonth, appliedStartDate, appliedEndDate]);
 
-  const tableRowsByMetric = useMemo(
-    () => buildMetricRows(filteredData, effectiveTableGranularity),
-    [filteredData, effectiveTableGranularity]
-  );
+  const isHourOfDayFilterActive = hourOfDayFilter !== "";
+
+  const tableRowsByMetric = useMemo(() => {
+    if (isHourOfDayFilterActive) {
+      return buildHourOfDayRows(filteredData, Number(hourOfDayFilter));
+    }
+
+    return buildMetricRows(filteredData, effectiveTableGranularity);
+  }, [filteredData, effectiveTableGranularity, hourOfDayFilter, isHourOfDayFilterActive]);
+
+  const jumpGranularity = isHourOfDayFilterActive ? "day" : effectiveTableGranularity;
 
   const tableSummaryByMetric = useMemo(
     () => Object.fromEntries(
@@ -1023,12 +1096,12 @@ const SensorDetail = () => {
   );
 
   const normalizedJumpTarget = useMemo(
-    () => normalizeJumpValue(tableJumpValue, effectiveTableGranularity),
-    [tableJumpValue, effectiveTableGranularity]
+    () => normalizeJumpValue(tableJumpValue, jumpGranularity),
+    [tableJumpValue, jumpGranularity]
   );
 
-  const jumpInputType = effectiveTableGranularity === "day" ? "date" : "datetime-local";
-  const jumpInputStep = effectiveTableGranularity === "reading" ? 60 : 3600;
+  const jumpInputType = jumpGranularity === "day" ? "date" : "datetime-local";
+  const jumpInputStep = jumpGranularity === "reading" ? 60 : 3600;
 
   const latestJumpValue = useMemo(() => {
     if (filteredData.length === 0) {
@@ -1037,36 +1110,36 @@ const SensorDetail = () => {
 
     const latestTimestamp = filteredData[filteredData.length - 1]?.timestamp;
 
-    if (effectiveTableGranularity === "day") {
+    if (jumpGranularity === "day") {
       return formatDailyBucketLabel(latestTimestamp);
     }
 
-    if (effectiveTableGranularity === "hour") {
+    if (jumpGranularity === "hour") {
       return formatHourLocalValue(latestTimestamp);
     }
 
     return formatDateTimeLocalValue(latestTimestamp);
-  }, [filteredData, effectiveTableGranularity]);
+  }, [filteredData, jumpGranularity]);
 
   const jumpInputMin = useMemo(() => {
     if (filteredData.length === 0) {
       return undefined;
     }
 
-    return effectiveTableGranularity === "day"
+    return jumpGranularity === "day"
       ? formatDailyBucketLabel(filteredData[0]?.timestamp)
       : formatDateTimeLocalValue(filteredData[0]?.timestamp);
-  }, [filteredData, effectiveTableGranularity]);
+  }, [filteredData, jumpGranularity]);
 
   const jumpInputMax = useMemo(() => {
     if (filteredData.length === 0) {
       return undefined;
     }
 
-    return effectiveTableGranularity === "day"
+    return jumpGranularity === "day"
       ? formatDailyBucketLabel(filteredData[filteredData.length - 1]?.timestamp)
       : formatDateTimeLocalValue(filteredData[filteredData.length - 1]?.timestamp);
-  }, [filteredData, effectiveTableGranularity]);
+  }, [filteredData, jumpGranularity]);
 
   const minMaxValues = useMemo(() => {
     return Object.keys(tableRowsByMetric).reduce((acc, key) => {
@@ -1106,7 +1179,7 @@ const SensorDetail = () => {
 
       Object.entries(tableRowsByMetric).forEach(([key, rows]) => {
         const matchIndex = rows.findIndex((row) =>
-          rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity)
+          rowMatchesJumpTarget(row, normalizedJumpTarget, jumpGranularity)
         );
         if (matchIndex === -1) {
           return;
@@ -1121,7 +1194,7 @@ const SensorDetail = () => {
 
       return changed ? next : prev;
     });
-  }, [normalizedJumpTarget, tableRowsByMetric, tableRowsPerPage, effectiveTableGranularity]);
+  }, [normalizedJumpTarget, tableRowsByMetric, tableRowsPerPage, jumpGranularity]);
 
   const reportRangeLabel = useMemo(() => {
     if (appliedStartDate && appliedEndDate) {
@@ -1306,7 +1379,9 @@ const SensorDetail = () => {
           })),
           summary,
           unit: unitMap[key] || "",
-          firstColumnLabel: getGranularityLabel(effectiveTableGranularity),
+          firstColumnLabel: isHourOfDayFilterActive
+            ? `Fecha (hora ~ ${formatHourOfDayOptionLabel(Number(hourOfDayFilter))})`
+            : getGranularityLabel(effectiveTableGranularity),
           startY: yOffset,
           topMargin: 37,
           marginLeft: 10,
@@ -1408,7 +1483,13 @@ const SensorDetail = () => {
       lines.push(`Variable;${escapeCsvCell(metricName)}`);
       lines.push(`Minimo global;${escapeCsvCell(Number.isFinite(summary.min) ? summary.min.toFixed(2) : "")}`);
       lines.push(`Maximo global;${escapeCsvCell(Number.isFinite(summary.max) ? summary.max.toFixed(2) : "")}`);
-      lines.push(`${escapeCsvCell(getGranularityLabel(effectiveTableGranularity))};Valor`);
+      lines.push(
+        `${escapeCsvCell(
+          isHourOfDayFilterActive
+            ? `Fecha (hora ~ ${formatHourOfDayOptionLabel(Number(hourOfDayFilter))})`
+            : getGranularityLabel(effectiveTableGranularity)
+        )};Valor`
+      );
 
       rows.forEach((row) => {
         const value = Number(row?.value);
@@ -1723,6 +1804,19 @@ const SensorDetail = () => {
             <option value={50}>50 filas</option>
             <option value={100}>100 filas</option>
           </select>
+          <select
+            value={hourOfDayFilter}
+            onChange={(e) => setHourOfDayFilter(e.target.value)}
+            className="border p-1 rounded"
+            title="Muestra el valor exacto mas cercano a esa hora en cada dia"
+          >
+            <option value="">Todas las horas</option>
+            {HOUR_OF_DAY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <input
             type={jumpInputType}
             value={tableJumpValue}
@@ -1749,9 +1843,11 @@ const SensorDetail = () => {
             Limpiar salto
           </button>
           <span className="text-xs text-gray-500">
-            {tableGranularityMode === "auto"
-              ? `Granularidad actual: ${getGranularityLabel(effectiveTableGranularity)}`
-              : ""}
+            {isHourOfDayFilterActive
+              ? `Filtrando por hora del dia (~${formatHourOfDayOptionLabel(Number(hourOfDayFilter))}), valores exactos.`
+              : tableGranularityMode === "auto"
+                ? `Granularidad actual: ${getGranularityLabel(effectiveTableGranularity)}`
+                : ""}
           </span>
         </div>
       </div>
@@ -1925,9 +2021,11 @@ const SensorDetail = () => {
           );
           const startIndex = (currentPage - 1) * tableRowsPerPage;
           const visibleRows = rows.slice(startIndex, startIndex + tableRowsPerPage);
-          const firstColumnLabel = getGranularityLabel(effectiveTableGranularity);
+          const firstColumnLabel = isHourOfDayFilterActive
+            ? `Fecha (hora ~ ${formatHourOfDayOptionLabel(Number(hourOfDayFilter))})`
+            : getGranularityLabel(effectiveTableGranularity);
           const hasDateMatch = normalizedJumpTarget
-            ? rows.some((row) => rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity))
+            ? rows.some((row) => rowMatchesJumpTarget(row, normalizedJumpTarget, jumpGranularity))
             : false;
 
           return (
@@ -1965,7 +2063,7 @@ const SensorDetail = () => {
                     <tr
                       key={row.label}
                       className={[
-                        rowMatchesJumpTarget(row, normalizedJumpTarget, effectiveTableGranularity) ? "bg-amber-50" : "",
+                        rowMatchesJumpTarget(row, normalizedJumpTarget, jumpGranularity) ? "bg-amber-50" : "",
                         isMinRow ? "bg-red-50" : "",
                         isMaxRow ? "bg-green-50" : "",
                       ].filter(Boolean).join(" ") || undefined}
