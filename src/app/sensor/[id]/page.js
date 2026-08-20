@@ -404,6 +404,31 @@ function getMetricThresholdRange(metricKey, threshold) {
   }
 }
 
+function getChartDomain(metricMinMax, thresholdRange) {
+  const values = [metricMinMax?.min, metricMinMax?.max, thresholdRange?.min, thresholdRange?.max].filter(
+    Number.isFinite
+  );
+
+  if (values.length === 0) {
+    return [0, 1];
+  }
+
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+
+  if (min === max) {
+    const padding = Math.abs(min) * 0.05 || 1;
+    min -= padding;
+    max += padding;
+  } else {
+    const padding = (max - min) * 0.05;
+    min -= padding;
+    max += padding;
+  }
+
+  return [min, max];
+}
+
 function calculateTableSummary(rows) {
   const numericValues = rows
     .map((row) => Number(row?.value))
@@ -1663,6 +1688,8 @@ const SensorDetail = () => {
         {filteredData.length > 0 &&
           orderedMetricKeys.map((key) => {
             const chartData = chartSeriesByMetric[key] || [];
+            const thresholdRange = getMetricThresholdRange(key, alarmState?.threshold);
+            const chartDomain = getChartDomain(minMaxValues[key], thresholdRange);
 
             if (chartData.length === 0 || minMaxValues[key].min == null) {
               return null;
@@ -1687,10 +1714,7 @@ const SensorDetail = () => {
                     />
 
                     <YAxis
-                      domain={[
-                        minMaxValues[key].min * 0.95,
-                        minMaxValues[key].max * 1.05,
-                      ]}
+                      domain={chartDomain}
                       tickFormatter={(value) => Number(value).toFixed(2)}
                     />
 
@@ -1700,45 +1724,45 @@ const SensorDetail = () => {
                     />
                     <CartesianGrid strokeDasharray="3 3" />
 
-                    {(() => {
-                      const threshold = getMetricThresholdRange(key, alarmState?.threshold);
+                    {Number.isFinite(thresholdRange.min) ? (
+                      <ReferenceLine
+                        y={thresholdRange.min}
+                        stroke="#dc2626"
+                        strokeOpacity={1}
+                        strokeLinecap="round"
+                        strokeDasharray="8 4"
+                        strokeWidth={2.5}
+                        isFront
+                        ifOverflow="visible"
+                        label={{
+                          value: `Min conf: ${thresholdRange.min.toFixed(2)} ${unitMap[key] || ""}`,
+                          position: "insideTopLeft",
+                          fill: "#b91c1c",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      />
+                    ) : null}
 
-                      return (
-                        <>
-                          {Number.isFinite(threshold.min) ? (
-                            <ReferenceLine
-                              y={threshold.min}
-                              stroke="#dc2626"
-                              strokeDasharray="6 4"
-                              strokeWidth={1.5}
-                              ifOverflow="extendDomain"
-                              label={{
-                                value: `Min conf: ${threshold.min.toFixed(2)} ${unitMap[key] || ""}`,
-                                position: "insideTopLeft",
-                                fill: "#b91c1c",
-                                fontSize: 11,
-                              }}
-                            />
-                          ) : null}
-
-                          {Number.isFinite(threshold.max) ? (
-                            <ReferenceLine
-                              y={threshold.max}
-                              stroke="#15803d"
-                              strokeDasharray="6 4"
-                              strokeWidth={1.5}
-                              ifOverflow="extendDomain"
-                              label={{
-                                value: `Max conf: ${threshold.max.toFixed(2)} ${unitMap[key] || ""}`,
-                                position: "insideTopRight",
-                                fill: "#166534",
-                                fontSize: 11,
-                              }}
-                            />
-                          ) : null}
-                        </>
-                      );
-                    })()}
+                    {Number.isFinite(thresholdRange.max) ? (
+                      <ReferenceLine
+                        y={thresholdRange.max}
+                        stroke="#15803d"
+                        strokeOpacity={1}
+                        strokeLinecap="round"
+                        strokeDasharray="8 4"
+                        strokeWidth={2.5}
+                        isFront
+                        ifOverflow="visible"
+                        label={{
+                          value: `Max conf: ${thresholdRange.max.toFixed(2)} ${unitMap[key] || ""}`,
+                          position: "insideTopRight",
+                          fill: "#166534",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      />
+                    ) : null}
 
                     <Line
                       type="monotone"
