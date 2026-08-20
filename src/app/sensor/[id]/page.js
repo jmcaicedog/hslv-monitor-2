@@ -848,6 +848,9 @@ const SensorDetail = () => {
   const [tableGranularityMode, setTableGranularityMode] = useState("auto");
   const [tableRowsPerPage, setTableRowsPerPage] = useState(20);
   const [tableJumpValue, setTableJumpValue] = useState("");
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [pendingReportType, setPendingReportType] = useState("");
+  const [reportObservations, setReportObservations] = useState("");
   const [pdfProgress, setPdfProgress] = useState({
     running: false,
     percent: 0,
@@ -1173,7 +1176,27 @@ const SensorDetail = () => {
     return Array.from(new Set(labels));
   }, [alarmState]);
 
-  async function handleDownloadPDF() {
+  function openReportModal(reportType) {
+    if (pdfProgress.running || csvProgress.running) {
+      return;
+    }
+
+    setPendingReportType(reportType);
+    setReportObservations("");
+    setReportModalOpen(true);
+  }
+
+  function closeReportModal() {
+    if (pdfProgress.running || csvProgress.running) {
+      return;
+    }
+
+    setReportModalOpen(false);
+    setPendingReportType("");
+    setReportObservations("");
+  }
+
+  async function handleDownloadPDF(observations = "") {
     if (pdfProgress.running) {
       return;
     }
@@ -1196,6 +1219,7 @@ const SensorDetail = () => {
       const generatedAt = new Date().toLocaleString("es-ES");
       const sensorTitle = sensorName || String(id || "Sensor");
       const generatedBy = currentUserName || "Usuario no disponible";
+      const trimmedObservations = String(observations || "").trim();
 
       const drawReportHeader = (instance) => {
       instance.setTextColor(20, 20, 20);
@@ -1215,8 +1239,21 @@ const SensorDetail = () => {
 
       drawReportHeader(doc);
 
-      const chartElements = document.querySelectorAll(".sensor-chart");
       let yOffset = 37;
+
+      if (trimmedObservations) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text("Observaciones:", 10, yOffset);
+        yOffset += 5;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        const observationLines = doc.splitTextToSize(trimmedObservations, 190);
+        doc.text(observationLines, 10, yOffset);
+        yOffset += observationLines.length * 4 + 4;
+      }
+
+      const chartElements = document.querySelectorAll(".sensor-chart");
 
       const captureScale = 1;
 
@@ -1319,7 +1356,7 @@ const SensorDetail = () => {
     }
   }
 
-  async function handleDownloadCSV() {
+  async function handleDownloadCSV(observations = "") {
     if (csvProgress.running) {
       return;
     }
@@ -1334,12 +1371,16 @@ const SensorDetail = () => {
     const generatedAt = new Date().toLocaleString("es-ES");
     const sensorTitle = sensorName || String(id || "Sensor");
     const generatedBy = currentUserName || "Usuario no disponible";
+    const trimmedObservations = String(observations || "").trim();
 
     const lines = [];
     lines.push(`Sensor;${escapeCsvCell(sensorTitle)}`);
     lines.push(`Usuario;${escapeCsvCell(generatedBy)}`);
     lines.push(`Rango;${escapeCsvCell(reportRangeLabel)}`);
     lines.push(`Generado;${escapeCsvCell(generatedAt)}`);
+    if (trimmedObservations) {
+      lines.push(`Observaciones;${escapeCsvCell(trimmedObservations)}`);
+    }
     lines.push("");
 
     const metricKeys = orderedMetricKeys;
@@ -1430,7 +1471,7 @@ const SensorDetail = () => {
           </button>
           <button
             className="p-2 bg-red-600 text-white rounded-full hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-300"
-            onClick={handleDownloadPDF}
+            onClick={() => openReportModal("pdf")}
             disabled={pdfProgress.running}
             title="Exportar reporte PDF"
           >
@@ -1439,7 +1480,7 @@ const SensorDetail = () => {
           </button>
           <button
             className="p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-500"
-            onClick={handleDownloadCSV}
+            onClick={() => openReportModal("csv")}
             disabled={csvProgress.running}
             title="Exportar tablas en CSV"
           >
@@ -1475,6 +1516,63 @@ const SensorDetail = () => {
               className="h-full bg-emerald-600 transition-all duration-300"
               style={{ width: `${Math.max(0, Math.min(100, csvProgress.percent))}%` }}
             />
+          </div>
+        </div>
+      ) : null}
+
+      {reportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Observaciones del reporte</h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  Agrega una nota breve antes de generar el {pendingReportType === "pdf" ? "PDF" : "CSV"}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeReportModal}
+                className="rounded-full border border-gray-300 p-2 text-gray-500 hover:bg-gray-50"
+                aria-label="Cerrar modal"
+              >
+                <FaTimes size={16} />
+              </button>
+            </div>
+
+            <textarea
+              value={reportObservations}
+              onChange={(e) => setReportObservations(e.target.value)}
+              placeholder="Escribe aquí las observaciones que quieres incluir en el reporte..."
+              className="mt-4 min-h-40 w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-blue-500"
+            />
+
+            <div className="mt-4 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeReportModal}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const observations = reportObservations.trim();
+                  setReportModalOpen(false);
+                  if (pendingReportType === "pdf") {
+                    await handleDownloadPDF(observations);
+                  } else if (pendingReportType === "csv") {
+                    await handleDownloadCSV(observations);
+                  }
+                  setPendingReportType("");
+                  setReportObservations("");
+                }}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+              >
+                Aceptar y generar
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
