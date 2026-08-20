@@ -39,6 +39,31 @@ export async function ensureAlertRuntimeSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS alarm_episodes (
+      id BIGSERIAL PRIMARY KEY,
+      sensor_id BIGINT NOT NULL,
+      triggered_at TIMESTAMPTZ NOT NULL,
+      metrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+      attended_at TIMESTAMPTZ,
+      attended_by TEXT,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS alarm_episodes_sensor_idx
+      ON alarm_episodes (sensor_id, triggered_at DESC);
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS alarm_episodes_open_idx
+      ON alarm_episodes (sensor_id)
+      WHERE resolved_at IS NULL;
+  `);
 }
 
 function createTriggerPayload(metricKey, value, threshold) {
@@ -109,7 +134,7 @@ function createTriggerPayload(metricKey, value, threshold) {
   }
 }
 
-function formatTriggeredMetrics(metrics) {
+export function formatTriggeredMetrics(metrics) {
   return metrics
     .map((metric) => {
       if (Number.isFinite(metric.min) && Number.isFinite(metric.max)) {
@@ -127,6 +152,35 @@ function formatTriggeredMetrics(metrics) {
 
 async function upsertSensorAlarmState(sensorId, triggeredMetrics) {
   const activeAlarm = triggeredMetrics.length > 0;
+  const metricsJson = JSON.stringify(triggeredMetrics);
+
+  // Un episodio queda "abierto" mientras la condicion no vuelve a la normalidad,
+  // asi evitamos crear un registro de disparo nuevo en cada corrida del cron.
+  const { rows: openRows } = await query(
+    `SELECT id FROM alarm_episodes WHERE sensor_id = $1 AND resolved_at IS NULL ORDER BY triggered_at DESC LIMIT 1;`,
+    [sensorId]
+  );
+  const openEpisode = openRows[0] || null;
+  const isNewEpisode = activeAlarm && !openEpisode;
+
+  if (activeAlarm) {
+    if (openEpisode) {
+      await query(
+        `UPDATE alarm_episodes SET metrics = $2::jsonb, updated_at = NOW() WHERE id = $1;`,
+        [openEpisode.id, metricsJson]
+      );
+    } else {
+      await query(
+        `INSERT INTO alarm_episodes (sensor_id, triggered_at, metrics) VALUES ($1, NOW(), $2::jsonb);`,
+        [sensorId, metricsJson]
+      );
+    }
+  } else if (openEpisode) {
+    await query(
+      `UPDATE alarm_episodes SET resolved_at = NOW(), updated_at = NOW() WHERE id = $1;`,
+      [openEpisode.id]
+    );
+  }
 
   await query(
     `
@@ -155,15 +209,19 @@ async function upsertSensorAlarmState(sensorId, triggeredMetrics) {
       ON CONFLICT (sensor_id)
       DO UPDATE SET
         active_alarm = EXCLUDED.active_alarm,
-        silenced = FALSE,
+        silenced = CASE WHEN $4 THEN FALSE ELSE sensor_alarm_state.silenced END,
         active_metrics = EXCLUDED.active_metrics,
-        triggered_at = CASE WHEN EXCLUDED.active_alarm THEN NOW() ELSE NULL END,
-        silenced_at = NULL,
-        silenced_by = NULL,
+        triggered_at = CASE
+          WHEN NOT EXCLUDED.active_alarm THEN NULL
+          WHEN $4 THEN NOW()
+          ELSE sensor_alarm_state.triggered_at
+        END,
+        silenced_at = CASE WHEN $4 THEN NULL ELSE sensor_alarm_state.silenced_at END,
+        silenced_by = CASE WHEN $4 THEN NULL ELSE sensor_alarm_state.silenced_by END,
         last_checked_at = NOW(),
         updated_at = NOW();
     `,
-    [sensorId, activeAlarm, JSON.stringify(triggeredMetrics)]
+    [sensorId, activeAlarm, metricsJson, isNewEpisode]
   );
 }
 
@@ -256,6 +314,16 @@ export async function attendSensorAlarm(sensorId, handledBy) {
   const handlerName = handledBy || "Usuario autenticado";
   const metricSummary = formatTriggeredMetrics(alarmState.activeMetrics);
 
+  // Se guarda quien y cuando atendio antes de marcar el sensor como normal (silenced = TRUE).
+  await query(
+    `
+      UPDATE alarm_episodes
+      SET attended_at = NOW(), attended_by = $2, updated_at = NOW()
+      WHERE sensor_id = $1 AND resolved_at IS NULL AND attended_at IS NULL;
+    `,
+    [sensorId, handlerName]
+  );
+
   await sendEmailByResend({
     emailFrom: config.emailFrom,
     emailTo: config.emailTo,
@@ -281,6 +349,56 @@ export async function attendSensorAlarm(sensorId, handledBy) {
   );
 
   return getSensorAlarmState(sensorId);
+}
+
+export async function listAlarmEpisodes({ limit = 50, offset = 0 } = {}) {
+  await ensureAlertRuntimeSchema();
+
+  const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+
+  const { rows } = await query(
+    `
+      SELECT
+        ae.id,
+        ae.sensor_id,
+        COALESCE(NULLIF(s.title, ''), 'Sensor ' || ae.sensor_id::text) AS sensor_name,
+        ae.triggered_at,
+        ae.metrics,
+        ae.attended_at,
+        ae.attended_by,
+        ae.resolved_at
+      FROM alarm_episodes ae
+      LEFT JOIN sensors s ON s.id = ae.sensor_id
+      ORDER BY ae.triggered_at DESC
+      LIMIT $1 OFFSET $2;
+    `,
+    [safeLimit, safeOffset]
+  );
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*)::int AS total FROM alarm_episodes;`
+  );
+
+  return {
+    episodes: rows.map((row) => {
+      const metrics = Array.isArray(row.metrics) ? row.metrics : [];
+
+      return {
+        id: Number(row.id),
+        sensorId: Number(row.sensor_id),
+        sensorName: row.sensor_name,
+        triggeredAt: row.triggered_at,
+        metrics,
+        metricsSummary: formatTriggeredMetrics(metrics),
+        attendedAt: row.attended_at,
+        attendedBy: row.attended_by,
+        resolvedAt: row.resolved_at,
+        status: row.attended_at ? "attended" : row.resolved_at ? "resolved" : "active",
+      };
+    }),
+    total: countRows[0]?.total || 0,
+  };
 }
 
 async function getAlertStateMap() {

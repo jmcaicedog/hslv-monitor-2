@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Eye, EyeOff, Home } from "lucide-react";
+import { Bell, Eye, EyeOff, Home, ScrollText } from "lucide-react";
 import {
   createUser,
   deleteUser,
@@ -136,6 +136,13 @@ export default function AdminUsersPage() {
               title="Configurar notificaciones"
             >
               <Bell size={20} />
+            </button>
+            <button
+              onClick={() => router.push("/admin/alarm-logs")}
+              className="bg-purple-600 hover:bg-purple-500 text-white p-2 rounded-full flex items-center shadow-lg"
+              title="Historial de alarmas"
+            >
+              <ScrollText size={20} />
             </button>
             <button
               onClick={() => router.push("/")}

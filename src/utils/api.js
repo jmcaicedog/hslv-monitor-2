@@ -193,6 +193,24 @@ export async function fetchSensorAlarmState(sensorId) {
   return data;
 }
 
+export async function fetchAlarmLogs({ limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+
+  const response = await fetch(`/api/admin/alarm-logs?${params.toString()}`, {
+    cache: "no-store",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo consultar el historial de alarmas");
+  }
+
+  return data;
+}
+
 export async function attendSensorAlarm(sensorId) {
   const response = await fetch(`/api/sensors/${sensorId}/alarm`, {
     method: "POST",

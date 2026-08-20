@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Home, Users } from "lucide-react";
+import { Home, ScrollText, Users } from "lucide-react";
 import {
   fetchAlertsConfig,
   fetchCurrentUser,
@@ -325,6 +325,13 @@ export default function AdminAlertsPage() {
               title="Administracion de usuarios"
             >
               <Users size={20} />
+            </button>
+            <button
+              onClick={() => router.push("/admin/alarm-logs")}
+              className="bg-purple-600 hover:bg-purple-500 text-white p-2 rounded-full flex items-center shadow-lg"
+              title="Historial de alarmas"
+            >
+              <ScrollText size={20} />
             </button>
             <button
               onClick={() => router.push("/")}

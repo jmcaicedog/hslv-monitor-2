@@ -5,7 +5,7 @@ import Card from "@/components/Card";
 import SearchBar from "@/components/SearchBar";
 import Sidebar from "@/components/Sidebar";
 import { fetchCurrentUser, fetchSensorsData } from "@/utils/api";
-import { Bell, LogOut, Users } from "lucide-react";
+import { Bell, LogOut, ScrollText, Users } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import Link from "next/link";
 
@@ -128,6 +128,13 @@ export default function Home() {
                     title="Configurar notificaciones"
                   >
                     <Bell size={20} />
+                  </Link>
+                  <Link
+                    href="/admin/alarm-logs"
+                    className="bg-purple-600 hover:bg-purple-500 text-white p-2 rounded-full flex items-center shadow-lg"
+                    title="Historial de alarmas"
+                  >
+                    <ScrollText size={20} />
                   </Link>
                 </>
               )}
