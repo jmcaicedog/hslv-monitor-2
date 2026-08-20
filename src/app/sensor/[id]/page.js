@@ -387,8 +387,10 @@ function getMetricThresholdRange(metricKey, threshold) {
 
   switch (metricKey) {
     case "temperatura":
+    case "temperatura2":
       return { min: asFinite(threshold.tempMin), max: asFinite(threshold.tempMax) };
     case "humedad":
+    case "humedad2":
       return { min: asFinite(threshold.humMin), max: asFinite(threshold.humMax) };
     case "voltaje":
       return { min: asFinite(threshold.voltMin), max: null };
