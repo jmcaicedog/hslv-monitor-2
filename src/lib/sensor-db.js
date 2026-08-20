@@ -504,10 +504,12 @@ export async function getSensorReadingsByRange({ sensorId, hours, month, startDa
       timestamp: row.observed_at,
       temperatura: row.temperatura,
       humedad: row.humedad,
-      temperatura2: row.temperatura_2,
-      humedad2: row.humedad_2,
+      // La sonda secundaria (temperatura_2/humedad_2) solo esta cableada en sensores "Carro de paro";
+      // en el resto el canal queda flotando y produce ruido, igual que en getSensorsOverview().
+      temperatura2: isCarroDeParo ? row.temperatura_2 : null,
+      humedad2: isCarroDeParo ? row.humedad_2 : null,
       voltaje: row.voltaje,
-        presion: isCarroDeParo ? null : row.presion,
+      presion: isCarroDeParo ? null : row.presion,
       luz: row.luz,
     })),
   };
