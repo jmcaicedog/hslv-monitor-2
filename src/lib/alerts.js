@@ -64,6 +64,36 @@ export async function ensureAlertRuntimeSchema() {
       ON alarm_episodes (sensor_id)
       WHERE resolved_at IS NULL;
   `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS sensor_readings_temp_latest_idx
+      ON sensor_readings (sensor_id, observed_at DESC)
+      WHERE temperatura IS NOT NULL;
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS sensor_readings_hum_latest_idx
+      ON sensor_readings (sensor_id, observed_at DESC)
+      WHERE humedad IS NOT NULL;
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS sensor_readings_volt_latest_idx
+      ON sensor_readings (sensor_id, observed_at DESC)
+      WHERE voltaje IS NOT NULL;
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS sensor_readings_pressure_latest_idx
+      ON sensor_readings (sensor_id, observed_at DESC)
+      WHERE presion IS NOT NULL;
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS sensor_readings_light_latest_idx
+      ON sensor_readings (sensor_id, observed_at DESC)
+      WHERE luz IS NOT NULL;
+  `);
 }
 
 function createTriggerPayload(metricKey, value, threshold) {
@@ -446,7 +476,31 @@ async function saveAlertState(sensorId, metricKey, value) {
   );
 }
 
-async function getLatestSensorValues() {
+function isRetryableDbError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("query read timeout") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("connection terminated") ||
+    message.includes("57p03")
+  );
+}
+
+function mapLatestSensorRows(rows) {
+  return rows.map((row) => ({
+    sensorId: Number(row.id),
+    status: row.status,
+    sensorName: row.sensor_name,
+    temperature: asNumber(row.temperatura),
+    humidity: asNumber(row.humedad),
+    voltage: asNumber(row.voltaje),
+    pressure: asNumber(row.presion),
+    light: asNumber(row.luz),
+  }));
+}
+
+async function getLatestSensorValuesPrimary() {
   const { rows } = await query(`
     SELECT
       s.id,
@@ -496,16 +550,67 @@ async function getLatestSensorValues() {
     ORDER BY s.title ASC;
   `);
 
-  return rows.map((row) => ({
-    sensorId: Number(row.id),
-    status: row.status,
-    sensorName: row.sensor_name,
-    temperature: asNumber(row.temperatura),
-    humidity: asNumber(row.humedad),
-    voltage: asNumber(row.voltaje),
-    pressure: asNumber(row.presion),
-    light: asNumber(row.luz),
-  }));
+  return mapLatestSensorRows(rows);
+}
+
+async function getLatestSensorValuesFallbackBySensor() {
+  const { rows: sensors } = await query(`
+    SELECT
+      id,
+      status,
+      COALESCE(NULLIF(title, ''), 'Sensor ' || id::text) AS sensor_name
+    FROM sensors
+    ORDER BY title ASC;
+  `);
+
+  const result = [];
+
+  for (const sensor of sensors) {
+    const { rows } = await query(
+      `
+        SELECT
+          (SELECT temperatura FROM sensor_readings WHERE sensor_id = $1 AND temperatura IS NOT NULL ORDER BY observed_at DESC LIMIT 1) AS temperatura,
+          (SELECT humedad FROM sensor_readings WHERE sensor_id = $1 AND humedad IS NOT NULL ORDER BY observed_at DESC LIMIT 1) AS humedad,
+          (SELECT voltaje FROM sensor_readings WHERE sensor_id = $1 AND voltaje IS NOT NULL ORDER BY observed_at DESC LIMIT 1) AS voltaje,
+          (SELECT presion FROM sensor_readings WHERE sensor_id = $1 AND presion IS NOT NULL ORDER BY observed_at DESC LIMIT 1) AS presion,
+          (SELECT luz FROM sensor_readings WHERE sensor_id = $1 AND luz IS NOT NULL ORDER BY observed_at DESC LIMIT 1) AS luz;
+      `,
+      [sensor.id]
+    );
+
+    const latest = rows[0] || {};
+    result.push({
+      sensorId: Number(sensor.id),
+      status: sensor.status,
+      sensorName: sensor.sensor_name,
+      temperature: asNumber(latest.temperatura),
+      humidity: asNumber(latest.humedad),
+      voltage: asNumber(latest.voltaje),
+      pressure: asNumber(latest.presion),
+      light: asNumber(latest.luz),
+    });
+  }
+
+  return result;
+}
+
+async function getLatestSensorValues() {
+  const maxAttempts = 2;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getLatestSensorValuesPrimary();
+    } catch (error) {
+      if (!isRetryableDbError(error) || attempt >= maxAttempts) {
+        break;
+      }
+
+      await sleep(300 * attempt);
+    }
+  }
+
+  console.warn("[alerts] Primary latest-values query failed; using fallback by sensor.");
+  return getLatestSensorValuesFallbackBySensor();
 }
 
 async function sendEmailByResend({ emailFrom, emailTo, subject, html }) {

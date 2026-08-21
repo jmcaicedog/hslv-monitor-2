@@ -26,7 +26,7 @@ function getPool() {
     5000
   );
   const idleTimeoutMillis = parsePositiveInt(process.env.DB_IDLE_TIMEOUT_MS, 30000);
-  const queryTimeoutMs = parsePositiveInt(process.env.DB_QUERY_TIMEOUT_MS, 12000);
+  const queryTimeoutMs = parsePositiveInt(process.env.DB_QUERY_TIMEOUT_MS, 30000);
   const maxPoolSize = parsePositiveInt(process.env.DB_POOL_MAX, 10);
 
   const pool = new Pool({
