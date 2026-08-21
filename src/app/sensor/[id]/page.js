@@ -11,6 +11,7 @@ import {
   FaTimes,
   FaFileCsv,
   FaFilePdf,
+  FaExclamationTriangle,
 } from "react-icons/fa";
 import {
   Cable,
@@ -927,6 +928,11 @@ const SensorDetail = () => {
     percent: 0,
     message: "",
   });
+  const [outOfRangePdfProgress, setOutOfRangePdfProgress] = useState({
+    running: false,
+    percent: 0,
+    message: "",
+  });
   const didInitDateBoundsRef = useRef(false);
 
   useEffect(() => {
@@ -1249,8 +1255,91 @@ const SensorDetail = () => {
     return Array.from(new Set(labels));
   }, [alarmState]);
 
+  const outOfRangeReport = useMemo(() => {
+    const threshold = alarmState?.threshold;
+    const tempRange = getMetricThresholdRange("temperatura", threshold);
+    const humRange = getMetricThresholdRange("humedad", threshold);
+
+    const hasTempThreshold = Number.isFinite(tempRange.min) && Number.isFinite(tempRange.max);
+    const hasHumThreshold = Number.isFinite(humRange.min) && Number.isFinite(humRange.max);
+
+    const report = {
+      hasThresholdConfig: hasTempThreshold && hasHumThreshold,
+      tempRange,
+      humRange,
+      totalTemperatureMeasurements: 0,
+      totalHumidityMeasurements: 0,
+      outTemperatureMeasurements: 0,
+      outHumidityMeasurements: 0,
+      outRows: [],
+    };
+
+    if (!report.hasThresholdConfig) {
+      return report;
+    }
+
+    for (const entry of filteredData) {
+      const temperature = Number(entry?.temperatura);
+      const humidity = Number(entry?.humedad);
+      const hasTemperature = Number.isFinite(temperature);
+      const hasHumidity = Number.isFinite(humidity);
+
+      if (!hasTemperature && !hasHumidity) {
+        continue;
+      }
+
+      if (hasTemperature) {
+        report.totalTemperatureMeasurements += 1;
+      }
+
+      if (hasHumidity) {
+        report.totalHumidityMeasurements += 1;
+      }
+
+      const isTempOut = hasTemperature &&
+        (temperature < tempRange.min || temperature > tempRange.max);
+      const isHumOut = hasHumidity &&
+        (humidity < humRange.min || humidity > humRange.max);
+
+      if (isTempOut) {
+        report.outTemperatureMeasurements += 1;
+      }
+
+      if (isHumOut) {
+        report.outHumidityMeasurements += 1;
+      }
+
+      if (isTempOut || isHumOut) {
+        const details = [];
+
+        if (isTempOut) {
+          details.push(
+            `Temperatura fuera de ${tempRange.min.toFixed(2)} a ${tempRange.max.toFixed(2)} °C`
+          );
+        }
+
+        if (isHumOut) {
+          details.push(
+            `Humedad fuera de ${humRange.min.toFixed(2)} a ${humRange.max.toFixed(2)} %`
+          );
+        }
+
+        report.outRows.push({
+          label: formatReadingLabel(entry.timestamp),
+          temperature: hasTemperature ? temperature : null,
+          humidity: hasHumidity ? humidity : null,
+          details: details.join(" | "),
+        });
+      }
+    }
+
+    return report;
+  }, [filteredData, alarmState?.threshold]);
+
+  const canGenerateOutOfRangeReport = outOfRangeReport.hasThresholdConfig;
+
   function openReportModal(reportType) {
-    if (pdfProgress.running || csvProgress.running) {
+    if (pdfProgress.running || csvProgress.running || outOfRangePdfProgress.running) {
       return;
     }
 
@@ -1260,13 +1349,29 @@ const SensorDetail = () => {
   }
 
   function closeReportModal() {
-    if (pdfProgress.running || csvProgress.running) {
+    if (pdfProgress.running || csvProgress.running || outOfRangePdfProgress.running) {
       return;
     }
 
     setReportModalOpen(false);
     setPendingReportType("");
     setReportObservations("");
+  }
+
+  function getReportTypeLabel(type) {
+    if (type === "pdf") {
+      return "PDF general";
+    }
+
+    if (type === "csv") {
+      return "CSV";
+    }
+
+    if (type === "out-of-range-pdf") {
+      return "PDF de mediciones fuera de rango";
+    }
+
+    return "reporte";
   }
 
   async function handleDownloadPDF(observations = "") {
@@ -1533,6 +1638,247 @@ const SensorDetail = () => {
     }, 1200);
   }
 
+  async function handleDownloadOutOfRangePDF(observations = "") {
+    if (outOfRangePdfProgress.running) {
+      return;
+    }
+
+    if (!outOfRangeReport.hasThresholdConfig) {
+      setError("No hay umbrales de temperatura/humedad configurados para generar este informe.");
+      return;
+    }
+
+    setOutOfRangePdfProgress({
+      running: true,
+      percent: 3,
+      message: "Preparando informe de mediciones fuera de rango...",
+    });
+    await waitForNextFrame();
+
+    try {
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+        compress: true,
+      });
+
+      const generatedAt = new Date().toLocaleString("es-ES");
+      const sensorTitle = sensorName || String(id || "Sensor");
+      const generatedBy = currentUserName || "Usuario no disponible";
+      const trimmedObservations = String(observations || "").trim();
+
+      const totalMeasurements =
+        outOfRangeReport.totalTemperatureMeasurements + outOfRangeReport.totalHumidityMeasurements;
+      const outMeasurements =
+        outOfRangeReport.outTemperatureMeasurements + outOfRangeReport.outHumidityMeasurements;
+      const outPercent = totalMeasurements > 0
+        ? (outMeasurements / totalMeasurements) * 100
+        : 0;
+
+      const drawReportHeader = (instance) => {
+        instance.setTextColor(20, 20, 20);
+        instance.setFont("helvetica", "bold");
+        instance.setFontSize(14);
+        instance.text(`Informe de mediciones fuera de rango - ${sensorTitle}`, 10, 14);
+
+        instance.setFont("helvetica", "normal");
+        instance.setFontSize(10);
+        instance.text(reportRangeLabel, 10, 20);
+        instance.text(`Usuario: ${generatedBy}`, 10, 25);
+        instance.text(`Generado: ${generatedAt}`, 10, 30);
+
+        instance.setDrawColor(200, 200, 200);
+        instance.line(10, 33, 200, 33);
+      };
+
+      drawReportHeader(doc);
+      setOutOfRangePdfProgress((prev) => ({
+        ...prev,
+        percent: 18,
+        message: "Construyendo resumen del indicador...",
+      }));
+      await waitForNextFrame();
+
+      let y = 38;
+      const marginLeft = 10;
+      const marginRight = 10;
+      const marginBottom = 10;
+      const topMargin = 37;
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const contentWidth = pageWidth - marginLeft - marginRight;
+
+      const ensureSpace = (requiredHeight) => {
+        if (y + requiredHeight <= pageHeight - marginBottom) {
+          return;
+        }
+
+        doc.addPage();
+        drawReportHeader(doc);
+        y = topMargin;
+      };
+
+      const writeTextBlock = (label, value) => {
+        ensureSpace(6);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text(`${label}:`, marginLeft, y);
+        doc.setFont("helvetica", "normal");
+        const lines = doc.splitTextToSize(String(value || ""), contentWidth - 34);
+        doc.text(lines, marginLeft + 24, y);
+        y += Math.max(6, lines.length * 4 + 1);
+      };
+
+      writeTextBlock(
+        "Rango temperatura",
+        `${outOfRangeReport.tempRange.min.toFixed(2)} a ${outOfRangeReport.tempRange.max.toFixed(2)} °C`
+      );
+      writeTextBlock(
+        "Rango humedad",
+        `${outOfRangeReport.humRange.min.toFixed(2)} a ${outOfRangeReport.humRange.max.toFixed(2)} %`
+      );
+      writeTextBlock(
+        "Formula",
+        "(Numero de mediciones fuera de rango (temperatura y/o humedad) / Numero total de mediciones de temperatura y humedad) x 100"
+      );
+      writeTextBlock(
+        "Resultado",
+        `${outMeasurements} / ${totalMeasurements} x 100 = ${outPercent.toFixed(2)}%`
+      );
+      writeTextBlock(
+        "Conteo por variable",
+        `Temperatura fuera de rango: ${outOfRangeReport.outTemperatureMeasurements} de ${outOfRangeReport.totalTemperatureMeasurements} | Humedad fuera de rango: ${outOfRangeReport.outHumidityMeasurements} de ${outOfRangeReport.totalHumidityMeasurements}`
+      );
+
+      if (trimmedObservations) {
+        writeTextBlock("Observaciones", trimmedObservations);
+      }
+
+      setOutOfRangePdfProgress((prev) => ({
+        ...prev,
+        percent: 46,
+        message: "Renderizando detalle de mediciones fuera de rango...",
+      }));
+      await waitForNextFrame();
+
+      ensureSpace(10);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text("Detalle de mediciones fuera de rango", marginLeft, y);
+      y += 6;
+
+      const detailRows = outOfRangeReport.outRows;
+
+      if (detailRows.length === 0) {
+        ensureSpace(8);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text("No se encontraron mediciones fuera de rango en el periodo seleccionado.", marginLeft, y);
+        y += 6;
+      } else {
+        const colWidths = [52, 26, 22, contentWidth - 100];
+        const rowHeight = 6;
+
+        const drawTableHeader = () => {
+          ensureSpace(rowHeight + 1);
+          doc.setFillColor(243, 244, 246);
+          doc.rect(marginLeft, y, contentWidth, rowHeight, "F");
+          doc.rect(marginLeft, y, contentWidth, rowHeight);
+
+          let x = marginLeft;
+          colWidths.forEach((width, index) => {
+            if (index > 0) {
+              doc.line(x, y, x, y + rowHeight);
+            }
+            x += width;
+          });
+
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8);
+          doc.text("Fecha / hora", marginLeft + 2, y + 4);
+          doc.text("Temp (°C)", marginLeft + colWidths[0] + 2, y + 4);
+          doc.text("Hum (%)", marginLeft + colWidths[0] + colWidths[1] + 2, y + 4);
+          doc.text("Detalle", marginLeft + colWidths[0] + colWidths[1] + colWidths[2] + 2, y + 4);
+          y += rowHeight;
+          doc.setFont("helvetica", "normal");
+        };
+
+        drawTableHeader();
+
+        for (const row of detailRows) {
+          const detailLines = doc.splitTextToSize(row.details || "", colWidths[3] - 4);
+          const dynamicHeight = Math.max(rowHeight, detailLines.length * 4 + 2);
+
+          ensureSpace(dynamicHeight + 1);
+          if (y === topMargin) {
+            drawTableHeader();
+          }
+
+          doc.rect(marginLeft, y, contentWidth, dynamicHeight);
+          let x = marginLeft;
+          colWidths.forEach((width, index) => {
+            if (index > 0) {
+              doc.line(x, y, x, y + dynamicHeight);
+            }
+            x += width;
+          });
+
+          doc.setFontSize(8);
+          doc.text(String(row.label || ""), marginLeft + 2, y + 4);
+          doc.text(
+            Number.isFinite(row.temperature) ? row.temperature.toFixed(2) : "--",
+            marginLeft + colWidths[0] + 2,
+            y + 4
+          );
+          doc.text(
+            Number.isFinite(row.humidity) ? row.humidity.toFixed(2) : "--",
+            marginLeft + colWidths[0] + colWidths[1] + 2,
+            y + 4
+          );
+          doc.text(
+            detailLines,
+            marginLeft + colWidths[0] + colWidths[1] + colWidths[2] + 2,
+            y + 4
+          );
+
+          y += dynamicHeight;
+        }
+      }
+
+      setOutOfRangePdfProgress((prev) => ({
+        ...prev,
+        percent: 95,
+        message: "Finalizando archivo PDF...",
+      }));
+      await waitForNextFrame();
+
+      const pdfBlob = doc.output("blob");
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.href = pdfUrl;
+      link.download = `sensor_${id}_fuera_de_rango.pdf`;
+      link.click();
+      URL.revokeObjectURL(pdfUrl);
+
+      setOutOfRangePdfProgress({
+        running: false,
+        percent: 100,
+        message: "Informe generado correctamente.",
+      });
+
+      setTimeout(() => {
+        setOutOfRangePdfProgress((prev) => (
+          prev.running ? prev : { running: false, percent: 0, message: "" }
+        ));
+      }, 1200);
+    } catch (err) {
+      console.error("Error exportando informe de fuera de rango:", err);
+      setError("No se pudo generar el informe de fuera de rango. Intenta nuevamente.");
+      setOutOfRangePdfProgress({ running: false, percent: 0, message: "" });
+    }
+  }
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-4">
@@ -1568,6 +1914,19 @@ const SensorDetail = () => {
             {" "}
             <FaFileCsv size={20} />{" "}
           </button>
+          <button
+            className="p-2 bg-amber-600 text-white rounded-full hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-amber-300"
+            onClick={() => openReportModal("out-of-range-pdf")}
+            disabled={outOfRangePdfProgress.running || !canGenerateOutOfRangeReport}
+            title={
+              canGenerateOutOfRangeReport
+                ? "Exportar informe de mediciones fuera de rango"
+                : "Configura umbrales de temperatura y humedad para habilitar este informe"
+            }
+          >
+            {" "}
+            <FaExclamationTriangle size={20} />{" "}
+          </button>
         </div>
       </div>
 
@@ -1601,6 +1960,21 @@ const SensorDetail = () => {
         </div>
       ) : null}
 
+      {outOfRangePdfProgress.running || outOfRangePdfProgress.message ? (
+        <div className="mb-4 rounded-md border border-gray-300 bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span>{outOfRangePdfProgress.message || "Procesando informe..."}</span>
+            <span>{outOfRangePdfProgress.percent}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded bg-gray-200">
+            <div
+              className="h-full bg-amber-600 transition-all duration-300"
+              style={{ width: `${Math.max(0, Math.min(100, outOfRangePdfProgress.percent))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
       {reportModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl">
@@ -1608,7 +1982,7 @@ const SensorDetail = () => {
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Observaciones del reporte</h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  Agrega una nota breve antes de generar el {pendingReportType === "pdf" ? "PDF" : "CSV"}.
+                  Agrega una nota breve antes de generar el {getReportTypeLabel(pendingReportType)}.
                 </p>
               </div>
               <button
@@ -1645,6 +2019,8 @@ const SensorDetail = () => {
                     await handleDownloadPDF(observations);
                   } else if (pendingReportType === "csv") {
                     await handleDownloadCSV(observations);
+                  } else if (pendingReportType === "out-of-range-pdf") {
+                    await handleDownloadOutOfRangePDF(observations);
                   }
                   setPendingReportType("");
                   setReportObservations("");
