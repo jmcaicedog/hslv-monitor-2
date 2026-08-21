@@ -1719,41 +1719,82 @@ const SensorDetail = () => {
         y = topMargin;
       };
 
-      const writeTextBlock = (label, value) => {
-        ensureSpace(6);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text(`${label}:`, marginLeft, y);
-        doc.setFont("helvetica", "normal");
-        const lines = doc.splitTextToSize(String(value || ""), contentWidth - 34);
-        doc.text(lines, marginLeft + 24, y);
-        y += Math.max(6, lines.length * 4 + 1);
-      };
-
-      writeTextBlock(
-        "Rango temperatura",
-        `${outOfRangeReport.tempRange.min.toFixed(2)} a ${outOfRangeReport.tempRange.max.toFixed(2)} °C`
-      );
-      writeTextBlock(
-        "Rango humedad",
-        `${outOfRangeReport.humRange.min.toFixed(2)} a ${outOfRangeReport.humRange.max.toFixed(2)} %`
-      );
-      writeTextBlock(
-        "Formula",
-        "(Numero de mediciones fuera de rango (temperatura y/o humedad) / Numero total de mediciones de temperatura y humedad) x 100"
-      );
-      writeTextBlock(
-        "Resultado",
-        `${outMeasurements} / ${totalMeasurements} x 100 = ${outPercent.toFixed(2)}%`
-      );
-      writeTextBlock(
-        "Conteo por variable",
-        `Temperatura fuera de rango: ${outOfRangeReport.outTemperatureMeasurements} de ${outOfRangeReport.totalTemperatureMeasurements} | Humedad fuera de rango: ${outOfRangeReport.outHumidityMeasurements} de ${outOfRangeReport.totalHumidityMeasurements}`
-      );
+      const summaryRows = [
+        {
+          label: "Rango temperatura",
+          value: `${outOfRangeReport.tempRange.min.toFixed(2)} a ${outOfRangeReport.tempRange.max.toFixed(2)} °C`,
+        },
+        {
+          label: "Rango humedad",
+          value: `${outOfRangeReport.humRange.min.toFixed(2)} a ${outOfRangeReport.humRange.max.toFixed(2)} %`,
+        },
+        {
+          label: "Formula",
+          value: "(Numero de mediciones fuera de rango (temperatura y/o humedad) / Numero total de mediciones de temperatura y humedad) x 100",
+        },
+        {
+          label: "Resultado",
+          value: `${outMeasurements} / ${totalMeasurements} x 100 = ${outPercent.toFixed(2)}%`,
+        },
+        {
+          label: "Conteo por variable",
+          value: `Temperatura fuera de rango: ${outOfRangeReport.outTemperatureMeasurements} de ${outOfRangeReport.totalTemperatureMeasurements} | Humedad fuera de rango: ${outOfRangeReport.outHumidityMeasurements} de ${outOfRangeReport.totalHumidityMeasurements}`,
+        },
+      ];
 
       if (trimmedObservations) {
-        writeTextBlock("Observaciones", trimmedObservations);
+        summaryRows.push({
+          label: "Observaciones",
+          value: trimmedObservations,
+        });
       }
+
+      const drawSummaryHeader = () => {
+        ensureSpace(12);
+        doc.setFillColor(243, 244, 246);
+        doc.roundedRect(marginLeft, y, contentWidth, 8, 1.5, 1.5, "F");
+        doc.setDrawColor(209, 213, 219);
+        doc.roundedRect(marginLeft, y, contentWidth, 8, 1.5, 1.5);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text("Resumen del indicador", marginLeft + 3, y + 5.2);
+        y += 9.5;
+      };
+
+      drawSummaryHeader();
+
+      const labelWidth = 46;
+      const valueWidth = contentWidth - labelWidth - 4;
+      const lineHeight = 4;
+
+      for (const item of summaryRows) {
+        const labelLines = doc.splitTextToSize(`${item.label}:`, labelWidth - 2);
+        const valueLines = doc.splitTextToSize(String(item.value || ""), valueWidth - 2);
+        const rowLineCount = Math.max(labelLines.length, valueLines.length);
+        const rowHeight = Math.max(7, rowLineCount * lineHeight + 2);
+
+        ensureSpace(rowHeight + 1);
+        if (y === topMargin) {
+          drawSummaryHeader();
+        }
+
+        doc.setDrawColor(209, 213, 219);
+        doc.setFillColor(250, 250, 250);
+        doc.rect(marginLeft, y, contentWidth, rowHeight, "FD");
+        doc.line(marginLeft + labelWidth, y, marginLeft + labelWidth, y + rowHeight);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.text(labelLines, marginLeft + 2, y + 4);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9.5);
+        doc.text(valueLines, marginLeft + labelWidth + 2, y + 4);
+
+        y += rowHeight;
+      }
+
+      y += 3;
 
       setOutOfRangePdfProgress((prev) => ({
         ...prev,
