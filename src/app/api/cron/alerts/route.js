@@ -55,6 +55,8 @@ export async function GET(request) {
     return unauthorized();
   }
 
+  const startedAt = Date.now();
+
   try {
     const result = await runThresholdAlerts();
 
@@ -66,6 +68,20 @@ export async function GET(request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Alert check failed";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    const stack = error instanceof Error ? error.stack : undefined;
+
+    console.error("[cron/alerts] Fatal error", {
+      message,
+      stack,
+      durationMs: Date.now() - startedAt,
+    });
+
+    // Para el scheduler externo devolvemos 200 y reportamos el fallo en el payload.
+    return NextResponse.json({
+      ok: false,
+      fatalFailure: true,
+      error: message,
+      durationMs: Date.now() - startedAt,
+    });
   }
 }
