@@ -58,11 +58,12 @@ export async function GET(request) {
   try {
     const result = await runThresholdAlerts();
 
-    if (result.ok) {
-      return NextResponse.json({ ok: true, ...result });
-    }
-
-    return NextResponse.json({ ok: false, ...result }, { status: 500 });
+    // Para jobs programados, devolvemos 200 incluso con errores parciales por sensor.
+    return NextResponse.json({
+      ok: result.ok,
+      partialFailure: !result.ok,
+      ...result,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Alert check failed";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
