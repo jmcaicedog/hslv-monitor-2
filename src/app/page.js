@@ -5,9 +5,24 @@ import Card from "@/components/Card";
 import SearchBar from "@/components/SearchBar";
 import Sidebar from "@/components/Sidebar";
 import { fetchCurrentUser, fetchSensorsData } from "@/utils/api";
-import { Bell, LogOut, ScrollText, Users } from "lucide-react";
+import {
+  Bell,
+  FilterX,
+  LogOut,
+  ScrollText,
+  ShieldAlert,
+  Users,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import Link from "next/link";
+
+const STATUS_FILTERS = [
+  { key: "connected", label: "Con conexión", icon: Wifi },
+  { key: "disconnected", label: "Sin conexión", icon: WifiOff },
+  { key: "alarm", label: "Con alarma", icon: ShieldAlert },
+];
 
 export default function Home() {
   const sessionState = authClient.useSession();
@@ -22,7 +37,22 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [activeStatusFilters, setActiveStatusFilters] = useState(new Set());
   const deferredSearchTerm = useDeferredValue(searchTerm);
+
+  const toggleStatusFilter = (key) => {
+    setActiveStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const clearStatusFilters = () => setActiveStatusFilters(new Set());
 
   const normalizeMetric = (value) => {
     const numeric = Number(value);
@@ -49,9 +79,15 @@ export default function Home() {
       const matchSearch = normalizedSearch
         ? sensor.title.toLowerCase().includes(normalizedSearch)
         : true;
-      return matchLocation && matchSearch;
+      const matchStatus =
+        activeStatusFilters.size === 0
+          ? true
+          : (activeStatusFilters.has("connected") && Number(sensor.status) !== 0) ||
+            (activeStatusFilters.has("disconnected") && Number(sensor.status) === 0) ||
+            (activeStatusFilters.has("alarm") && sensor.hasActiveAlarm);
+      return matchLocation && matchSearch && matchStatus;
     });
-  }, [deferredSearchTerm, selectedLocation, sensors]);
+  }, [activeStatusFilters, deferredSearchTerm, selectedLocation, sensors]);
 
   useEffect(() => {
     async function loadSensors() {
@@ -151,6 +187,39 @@ export default function Home() {
                 ? `📍 Mostrando sensores de: ${selectedLocation} (${filteredSensors.length})`
                 : `🌍 Mostrando todos los sensores (${filteredSensors.length})`}
             </p>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {STATUS_FILTERS.map(({ key, label, icon: Icon }) => {
+                const isActive = activeStatusFilters.has(key);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => toggleStatusFilter(key)}
+                    title={label}
+                    aria-pressed={isActive}
+                    className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                      isActive
+                        ? "border-blue-600 bg-blue-600 text-white shadow"
+                        : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                    }`}
+                  >
+                    <Icon size={14} />
+                    {label}
+                  </button>
+                );
+              })}
+              {activeStatusFilters.size > 0 && (
+                <button
+                  type="button"
+                  onClick={clearStatusFilters}
+                  title="Limpiar filtros"
+                  className="flex items-center gap-1.5 rounded-full border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100"
+                >
+                  <FilterX size={14} />
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
             {/* Componente de barra de búsqueda */}
             <SearchBar value={searchTerm} onChange={setSearchTerm} />
           </div>
