@@ -4,7 +4,6 @@ import {
   FaBolt,
   FaCompressArrowsAlt,
   FaSun,
-  FaCircle,
   FaExclamationTriangle,
   FaPowerOff,
 } from "react-icons/fa";
@@ -17,6 +16,8 @@ import {
   Gauge,
   Sun as SunIcon,
   Thermometer,
+  Wifi,
+  WifiOff,
   Zap,
 } from "lucide-react";
 
@@ -213,13 +214,11 @@ function Card({
         >
           <p className="flex items-center justify-center gap-1">
             <strong>ESTADO:</strong>
-            <FaCircle
-              className={
-                status == 0
-                  ? "text-red-400 text-xl"
-                  : "text-green-400 text-xl"
-              }
-            />
+            {status == 0 ? (
+              <WifiOff className="h-5 w-5 text-red-500" strokeWidth={2.2} />
+            ) : (
+              <Wifi className="h-5 w-5 text-green-500" strokeWidth={2.2} />
+            )}
           </p>
           <p className="mt-1">
             <strong>ACTUALIZACIÓN:</strong> {formattedDate}

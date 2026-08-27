@@ -690,35 +690,14 @@ export async function runThresholdAlerts() {
     : 180;
 
   for (const sensor of sensorDataList) {
-    const { sensorId, sensorName, status, temperature, humidity, voltage, pressure, light } = sensor;
+    const { sensorId, sensorName, temperature, humidity, voltage, pressure, light } = sensor;
     const sensorThreshold = thresholdMap.get(sensorId);
     const canCheckThresholds = Boolean(sensorThreshold) && sensorThreshold.enabled !== false;
 
+    // El estado inactivo del sensor ya no genera alerta ni alarma (solo se refleja en la card).
     const triggeredMetrics = [];
 
     try {
-      if (Number(status) === 0) {
-        triggeredMetrics.push(createTriggerPayload("inactive", 0));
-
-        const metricKey = "inactive";
-        const stateKey = `${sensorId}:${metricKey}`;
-        const lastSentAt = alertStateMap.get(stateKey);
-
-        if (!canSendByCooldown(lastSentAt, cooldownMinutes)) {
-          skippedByCooldown += 1;
-        } else {
-          const message = `
-          El sensor <strong>${sensorName}</strong> se encuentra en estado
-          <strong>inactivo</strong> y no esta reportando actividad normal.`;
-
-          await sendEmailAlert(config, sensorName, "Sensor Inactivo", message);
-          await saveAlertState(sensorId, metricKey, 0);
-          alertStateMap.set(stateKey, new Date());
-          sentAlerts += 1;
-          await sleep(500);
-        }
-      }
-
       if (!canCheckThresholds) {
         await upsertSensorAlarmState(sensorId, triggeredMetrics);
         continue;
