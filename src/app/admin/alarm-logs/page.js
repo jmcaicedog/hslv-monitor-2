@@ -3,81 +3,61 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Home, Users } from "lucide-react";
-import { fetchAlarmLogs, fetchCurrentUser } from "@/utils/api";
+import { fetchCurrentUser } from "@/utils/api";
+import AlarmLogsTab from "./AlarmLogsTab";
+import ReportLogsTab from "./ReportLogsTab";
 
-const PAGE_SIZE = 50;
-
-function formatDateTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString();
-}
-
-function statusLabel(status) {
-  switch (status) {
-    case "attended":
-      return { text: "Atendida", className: "bg-emerald-900/60 text-emerald-200 border-emerald-700" };
-    case "resolved":
-      return { text: "Resuelta sola", className: "bg-blue-900/60 text-blue-200 border-blue-700" };
-    default:
-      return { text: "Activa", className: "bg-red-900/60 text-red-200 border-red-700" };
-  }
-}
+const TABS = [
+  { key: "alarms", label: "Alarmas" },
+  { key: "reports", label: "Reportes generados" },
+];
 
 export default function AdminAlarmLogsPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [checkingAccess, setCheckingAccess] = useState(true);
   const [error, setError] = useState("");
-  const [episodes, setEpisodes] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [activeTab, setActiveTab] = useState("alarms");
+  const [currentUserName, setCurrentUserName] = useState("");
 
-  const loadPage = useCallback(async (offset) => {
-    const response = await fetchAlarmLogs({ limit: PAGE_SIZE, offset });
-    return response;
+  const handleError = useCallback((message) => {
+    setError(message);
   }, []);
 
   useEffect(() => {
-    async function init() {
-      try {
-        setLoading(true);
-        setError("");
+    let cancelled = false;
 
+    async function checkAccess() {
+      try {
         const me = await fetchCurrentUser();
+        if (cancelled) return;
+
         if (me?.user?.role !== "admin") {
           router.replace("/");
           return;
         }
 
-        const response = await loadPage(0);
-        setEpisodes(response.episodes || []);
-        setTotal(response.total || 0);
+        setCurrentUserName(me?.user?.name || me?.user?.email || "");
+        setCheckingAccess(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "No se pudo cargar el historial.");
-      } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "No se pudo validar la sesion.");
+          setCheckingAccess(false);
+        }
       }
     }
 
-    init();
-  }, [loadPage, router]);
+    checkAccess();
 
-  async function handleLoadMore() {
-    try {
-      setLoadingMore(true);
-      setError("");
-      const response = await loadPage(episodes.length);
-      setEpisodes((prev) => [...prev, ...(response.episodes || [])]);
-      setTotal(response.total || 0);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo cargar mas registros.");
-    } finally {
-      setLoadingMore(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
-  const hasMore = episodes.length < total;
+  useEffect(() => {
+    if (!error) return undefined;
+    const timer = setTimeout(() => setError(""), 6000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 md:p-6">
@@ -91,7 +71,7 @@ export default function AdminAlarmLogsPage() {
         )}
 
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-2xl font-bold">Historial de alarmas</h1>
+          <h1 className="text-2xl font-bold">Historial de eventos</h1>
           <div className="flex items-center gap-2">
             <button
               onClick={() => router.push("/admin/users")}
@@ -117,75 +97,29 @@ export default function AdminAlarmLogsPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">
-              Alarmas generadas ({total})
-            </h2>
-          </div>
+        <div className="flex gap-2 border-b border-gray-700">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === tab.key
+                  ? "border-blue-500 text-white"
+                  : "border-transparent text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-          {loading ? (
-            <p className="text-gray-400">Cargando historial...</p>
-          ) : episodes.length === 0 ? (
-            <p className="text-gray-400">Aun no hay alarmas registradas.</p>
+        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+          {checkingAccess ? (
+            <p className="text-gray-400">Validando acceso...</p>
+          ) : activeTab === "alarms" ? (
+            <AlarmLogsTab onError={handleError} currentUserName={currentUserName} />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-400 border-b border-gray-700">
-                    <th className="py-2 pr-4">Sensor</th>
-                    <th className="py-2 pr-4">Variables</th>
-                    <th className="py-2 pr-4">Generada</th>
-                    <th className="py-2 pr-4">Atendida por</th>
-                    <th className="py-2 pr-4">Atendida el</th>
-                    <th className="py-2 pr-4">Resuelta el</th>
-                    <th className="py-2 pr-4">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {episodes.map((episode) => {
-                    const status = statusLabel(episode.status);
-                    return (
-                      <tr key={episode.id} className="border-b border-gray-800 align-top">
-                        <td className="py-2 pr-4 font-medium">{episode.sensorName}</td>
-                        <td className="py-2 pr-4 text-gray-300 max-w-xs">
-                          {episode.metricsSummary || "-"}
-                        </td>
-                        <td className="py-2 pr-4 whitespace-nowrap">
-                          {formatDateTime(episode.triggeredAt)}
-                        </td>
-                        <td className="py-2 pr-4">{episode.attendedBy || "-"}</td>
-                        <td className="py-2 pr-4 whitespace-nowrap">
-                          {formatDateTime(episode.attendedAt)}
-                        </td>
-                        <td className="py-2 pr-4 whitespace-nowrap">
-                          {formatDateTime(episode.resolvedAt)}
-                        </td>
-                        <td className="py-2 pr-4">
-                          <span
-                            className={`rounded-full border px-2 py-1 text-xs ${status.className}`}
-                          >
-                            {status.text}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {hasMore && (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={handleLoadMore}
-                disabled={loadingMore}
-                className="rounded-md bg-gray-700 hover:bg-gray-600 disabled:opacity-60 px-4 py-2 text-sm"
-              >
-                {loadingMore ? "Cargando..." : "Cargar mas"}
-              </button>
-            </div>
+            <ReportLogsTab onError={handleError} currentUserName={currentUserName} />
           )}
         </div>
       </div>

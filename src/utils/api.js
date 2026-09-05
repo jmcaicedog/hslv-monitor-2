@@ -193,10 +193,12 @@ export async function fetchSensorAlarmState(sensorId) {
   return data;
 }
 
-export async function fetchAlarmLogs({ limit = 50, offset = 0 } = {}) {
+export async function fetchAlarmLogs({ limit = 50, offset = 0, from, to } = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("offset", String(offset));
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
 
   const response = await fetch(`/api/admin/alarm-logs?${params.toString()}`, {
     cache: "no-store",
@@ -206,6 +208,42 @@ export async function fetchAlarmLogs({ limit = 50, offset = 0 } = {}) {
 
   if (!response.ok) {
     throw new Error(data.error || "No se pudo consultar el historial de alarmas");
+  }
+
+  return data;
+}
+
+export async function fetchReportLogs({ limit = 50, offset = 0, from, to } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+
+  const response = await fetch(`/api/report-logs?${params.toString()}`, {
+    cache: "no-store",
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo consultar el historial de reportes");
+  }
+
+  return data;
+}
+
+export async function logReportGeneration(payload) {
+  const response = await fetch("/api/report-logs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "No se pudo registrar la generacion del reporte");
   }
 
   return data;

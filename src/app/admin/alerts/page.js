@@ -329,7 +329,7 @@ export default function AdminAlertsPage() {
             <button
               onClick={() => router.push("/admin/alarm-logs")}
               className="bg-purple-600 hover:bg-purple-500 text-white p-2 rounded-full flex items-center shadow-lg"
-              title="Historial de alarmas"
+              title="Historial de eventos"
             >
               <ScrollText size={20} />
             </button>

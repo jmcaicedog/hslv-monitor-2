@@ -30,8 +30,10 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const limit = Number(searchParams.get("limit")) || 50;
     const offset = Number(searchParams.get("offset")) || 0;
+    const from = searchParams.get("from") || undefined;
+    const to = searchParams.get("to") || undefined;
 
-    const result = await listAlarmEpisodes({ limit, offset });
+    const result = await listAlarmEpisodes({ limit, offset, from, to });
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

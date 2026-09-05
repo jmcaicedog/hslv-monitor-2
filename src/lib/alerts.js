@@ -381,11 +381,37 @@ export async function attendSensorAlarm(sensorId, handledBy) {
   return getSensorAlarmState(sensorId);
 }
 
-export async function listAlarmEpisodes({ limit = 50, offset = 0 } = {}) {
+function toTimestampOrNull(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export async function listAlarmEpisodes({ limit = 50, offset = 0, from, to } = {}) {
   await ensureAlertRuntimeSchema();
 
-  const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 50));
   const safeOffset = Math.max(0, Number(offset) || 0);
+  const fromTs = toTimestampOrNull(from);
+  const toTs = toTimestampOrNull(to);
+
+  const filters = [];
+  const filterParams = [];
+
+  if (fromTs) {
+    filterParams.push(fromTs);
+    filters.push(`ae.triggered_at >= $${filterParams.length}`);
+  }
+
+  if (toTs) {
+    filterParams.push(toTs);
+    filters.push(`ae.triggered_at <= $${filterParams.length}`);
+  }
+
+  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
   const { rows } = await query(
     `
@@ -400,14 +426,16 @@ export async function listAlarmEpisodes({ limit = 50, offset = 0 } = {}) {
         ae.resolved_at
       FROM alarm_episodes ae
       LEFT JOIN sensors s ON s.id = ae.sensor_id
+      ${whereClause}
       ORDER BY ae.triggered_at DESC
-      LIMIT $1 OFFSET $2;
+      LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2};
     `,
-    [safeLimit, safeOffset]
+    [...filterParams, safeLimit, safeOffset]
   );
 
   const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS total FROM alarm_episodes;`
+    `SELECT COUNT(*)::int AS total FROM alarm_episodes ae ${whereClause};`,
+    filterParams
   );
 
   return {

@@ -4,6 +4,7 @@ import {
   fetchCurrentUser,
   fetchSensorAlarmState,
   fetchSensorReadings,
+  logReportGeneration,
 } from "@/utils/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1374,6 +1375,28 @@ const SensorDetail = () => {
     return "reporte";
   }
 
+  // El registro no debe bloquear ni interrumpir la descarga del reporte.
+  function registerReportGeneration(reportType, observations) {
+    const firstTimestamp = filteredData[0]?.timestamp;
+    const lastTimestamp = filteredData[filteredData.length - 1]?.timestamp;
+
+    logReportGeneration({
+      sensorId: Number(id),
+      sensorName: sensorName || String(id || ""),
+      reportType,
+      observations,
+      rangeLabel: reportRangeLabel,
+      rangeStart: Number.isFinite(firstTimestamp)
+        ? new Date(firstTimestamp).toISOString()
+        : null,
+      rangeEnd: Number.isFinite(lastTimestamp)
+        ? new Date(lastTimestamp).toISOString()
+        : null,
+    }).catch((err) => {
+      console.error("No se pudo registrar la generacion del reporte:", err);
+    });
+  }
+
   async function handleDownloadPDF(observations = "") {
     if (pdfProgress.running) {
       return;
@@ -2056,6 +2079,7 @@ const SensorDetail = () => {
                 onClick={async () => {
                   const observations = reportObservations.trim();
                   setReportModalOpen(false);
+                  registerReportGeneration(pendingReportType, observations);
                   if (pendingReportType === "pdf") {
                     await handleDownloadPDF(observations);
                   } else if (pendingReportType === "csv") {
