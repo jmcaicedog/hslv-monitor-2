@@ -32,8 +32,10 @@ export async function GET(request) {
     const offset = Number(searchParams.get("offset")) || 0;
     const from = searchParams.get("from") || undefined;
     const to = searchParams.get("to") || undefined;
+    const search = searchParams.get("search") || undefined;
+    const sensorId = searchParams.get("sensorId") || undefined;
 
-    const result = await listAlarmEpisodes({ limit, offset, from, to });
+    const result = await listAlarmEpisodes({ limit, offset, from, to, search, sensorId });
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

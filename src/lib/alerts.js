@@ -14,7 +14,19 @@ function asNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function ensureAlertRuntimeSchema() {
+let alertSchemaPromise;
+
+export function ensureAlertRuntimeSchema() {
+  if (!alertSchemaPromise) {
+    alertSchemaPromise = initializeAlertRuntimeSchema().catch((error) => {
+      alertSchemaPromise = null;
+      throw error;
+    });
+  }
+  return alertSchemaPromise;
+}
+
+async function initializeAlertRuntimeSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS alert_notification_state (
       sensor_id BIGINT NOT NULL,
@@ -57,6 +69,11 @@ export async function ensureAlertRuntimeSchema() {
   await query(`
     CREATE INDEX IF NOT EXISTS alarm_episodes_sensor_idx
       ON alarm_episodes (sensor_id, triggered_at DESC);
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS alarm_episodes_triggered_idx
+      ON alarm_episodes (triggered_at DESC);
   `);
 
   await query(`
@@ -390,7 +407,7 @@ function toTimestampOrNull(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-export async function listAlarmEpisodes({ limit = 50, offset = 0, from, to } = {}) {
+export async function listAlarmEpisodes({ limit = 50, offset = 0, from, to, search, sensorId } = {}) {
   await ensureAlertRuntimeSchema();
 
   const safeLimit = Math.min(500, Math.max(1, Number(limit) || 50));
@@ -411,9 +428,19 @@ export async function listAlarmEpisodes({ limit = 50, offset = 0, from, to } = {
     filters.push(`ae.triggered_at <= $${filterParams.length}`);
   }
 
+  if (sensorId && /^\d+$/.test(String(sensorId))) {
+    filterParams.push(Number(sensorId));
+    filters.push(`ae.sensor_id = $${filterParams.length}`);
+  }
+
+  if (search?.trim()) {
+    filterParams.push(`%${search.trim()}%`);
+    filters.push(`(COALESCE(s.title, 'Sensor ' || ae.sensor_id::text) ILIKE $${filterParams.length} OR COALESCE(ae.attended_by, '') ILIKE $${filterParams.length} OR ae.metrics::text ILIKE $${filterParams.length})`);
+  }
+
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
-  const { rows } = await query(
+  const [{ rows }, { rows: countRows }] = await Promise.all([query(
     `
       SELECT
         ae.id,
@@ -431,12 +458,10 @@ export async function listAlarmEpisodes({ limit = 50, offset = 0, from, to } = {
       LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2};
     `,
     [...filterParams, safeLimit, safeOffset]
-  );
-
-  const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS total FROM alarm_episodes ae ${whereClause};`,
+  ), query(
+    `SELECT COUNT(*)::int AS total FROM alarm_episodes ae ${search?.trim() ? "LEFT JOIN sensors s ON s.id = ae.sensor_id" : ""} ${whereClause};`,
     filterParams
-  );
+  )]);
 
   return {
     episodes: rows.map((row) => {

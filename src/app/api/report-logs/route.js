@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { insertReportLog, listReportLogs, REPORT_TYPES } from "@/lib/report-log-db";
+import { insertReportLog, listReportLogs, listReportLogUsers, REPORT_TYPES } from "@/lib/report-log-db";
 import { getCurrentUser, isAdminUser } from "@/lib/auth-server";
 
 export const dynamic = "force-dynamic";
@@ -41,12 +41,17 @@ export async function GET(request) {
     }
 
     const { searchParams } = new URL(request.url);
+    if (searchParams.get("users") === "1") {
+      return NextResponse.json({ users: await listReportLogUsers() });
+    }
     const limit = Number(searchParams.get("limit")) || 50;
     const offset = Number(searchParams.get("offset")) || 0;
     const from = searchParams.get("from") || undefined;
     const to = searchParams.get("to") || undefined;
+    const search = searchParams.get("search") || undefined;
+    const filterUser = searchParams.get("user") || undefined;
 
-    const result = await listReportLogs({ limit, offset, from, to });
+    const result = await listReportLogs({ limit, offset, from, to, search, user: filterUser });
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

@@ -193,12 +193,14 @@ export async function fetchSensorAlarmState(sensorId) {
   return data;
 }
 
-export async function fetchAlarmLogs({ limit = 50, offset = 0, from, to } = {}) {
+export async function fetchAlarmLogs({ limit = 50, offset = 0, from, to, search, sensorId } = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (search) params.set("search", search);
+  if (sensorId) params.set("sensorId", sensorId);
 
   const response = await fetch(`/api/admin/alarm-logs?${params.toString()}`, {
     cache: "no-store",
@@ -213,12 +215,21 @@ export async function fetchAlarmLogs({ limit = 50, offset = 0, from, to } = {}) 
   return data;
 }
 
-export async function fetchReportLogs({ limit = 50, offset = 0, from, to } = {}) {
+export async function fetchReportLogUsers() {
+  const response = await fetch("/api/report-logs?users=1", { cache: "no-store" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "No se pudieron cargar los usuarios.");
+  return data.users || [];
+}
+
+export async function fetchReportLogs({ limit = 50, offset = 0, from, to, search, user } = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (search) params.set("search", search);
+  if (user) params.set("user", user);
 
   const response = await fetch(`/api/report-logs?${params.toString()}`, {
     cache: "no-store",

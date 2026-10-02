@@ -100,7 +100,20 @@ export async function insertReportLog({
   return mapRow(rows[0]);
 }
 
-export async function listReportLogs({ limit = 50, offset = 0, from, to } = {}) {
+export async function listReportLogUsers() {
+  await ensureSensorSchema();
+  const { rows } = await query(`
+    SELECT COALESCE(NULLIF(user_email, ''), NULLIF(user_name, '')) AS value,
+           MAX(NULLIF(user_name, '')) AS name
+    FROM report_logs
+    WHERE COALESCE(NULLIF(user_email, ''), NULLIF(user_name, '')) IS NOT NULL
+    GROUP BY 1
+    ORDER BY name NULLS LAST, value;
+  `);
+  return rows;
+}
+
+export async function listReportLogs({ limit = 50, offset = 0, from, to, search, user } = {}) {
   await ensureSensorSchema();
 
   const safeLimit = Math.min(500, Math.max(1, Number(limit) || 50));
@@ -121,9 +134,19 @@ export async function listReportLogs({ limit = 50, offset = 0, from, to } = {}) 
     filters.push(`rl.created_at <= $${filterParams.length}`);
   }
 
+  if (search?.trim()) {
+    filterParams.push(`%${search.trim()}%`);
+    filters.push(`(COALESCE(s.title, rl.sensor_name, '') ILIKE $${filterParams.length} OR rl.report_type ILIKE $${filterParams.length} OR COALESCE(rl.observations, '') ILIKE $${filterParams.length} OR COALESCE(rl.range_label, '') ILIKE $${filterParams.length})`);
+  }
+
+  if (user?.trim()) {
+    filterParams.push(user.trim());
+    filters.push(`COALESCE(NULLIF(rl.user_email, ''), NULLIF(rl.user_name, '')) = $${filterParams.length}`);
+  }
+
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
-  const { rows } = await query(
+  const [{ rows }, { rows: countRows }] = await Promise.all([query(
     `
       SELECT
         rl.id,
@@ -149,12 +172,10 @@ export async function listReportLogs({ limit = 50, offset = 0, from, to } = {}) 
       LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2};
     `,
     [...filterParams, safeLimit, safeOffset]
-  );
-
-  const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS total FROM report_logs rl ${whereClause};`,
+  ), query(
+    `SELECT COUNT(*)::int AS total FROM report_logs rl ${search?.trim() ? "LEFT JOIN sensors s ON s.id = rl.sensor_id" : ""} ${whereClause};`,
     filterParams
-  );
+  )]);
 
   return {
     logs: rows.map(mapRow),

@@ -46,6 +46,9 @@ export async function fetchAllPages(fetcher, rangeParams, extractItems) {
 
     const batch = extractItems(response) || [];
     total = response.total || 0;
+    if (total > MAX_EXPORT_ROWS) {
+      throw new Error(`La exportacion admite hasta ${MAX_EXPORT_ROWS} registros. Acota el rango de fechas.`);
+    }
     items.push(...batch);
     offset += EXPORT_PAGE_SIZE;
 

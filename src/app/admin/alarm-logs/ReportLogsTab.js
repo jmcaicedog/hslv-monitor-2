@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { FileDown } from "lucide-react";
-import { fetchReportLogs } from "@/utils/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FileDown, Sheet } from "lucide-react";
+import { fetchReportLogs, fetchReportLogUsers } from "@/utils/api";
 import { exportLogsToPdf } from "@/lib/logs-pdf";
-import ExportRangeModal from "./ExportRangeModal";
+import { exportLogsToExcel } from "@/lib/logs-excel";
+import LogsFilters from "./LogsFilters";
 import {
   PAGE_SIZE,
   buildRangeLabel,
@@ -34,18 +35,43 @@ function reportTypeClassName(reportType) {
 }
 
 export default function ReportLogsTab({ onError, currentUserName }) {
+  const [filters, setFilters] = useState({ search: "", user: "", from: "", to: "" });
+  const [appliedFilters, setAppliedFilters] = useState(filters);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const requestId = useRef(0);
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
   const [expandedId, setExpandedId] = useState(null);
-  const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const invalidRange = Boolean(filters.from && filters.to && filters.from > filters.to);
 
-  const loadPage = useCallback((offset) => fetchReportLogs({ limit: PAGE_SIZE, offset }), []);
+  useEffect(() => {
+    if (invalidRange) return undefined;
+    const timer = setTimeout(() => setAppliedFilters(filters), 300);
+    return () => clearTimeout(timer);
+  }, [filters, invalidRange]);
 
   useEffect(() => {
     let cancelled = false;
+    fetchReportLogUsers().then((data) => {
+      if (!cancelled) setUsers(data);
+    }).catch((err) => {
+      if (!cancelled) onError(err instanceof Error ? err.message : "No se pudieron cargar los usuarios.");
+    });
+    return () => { cancelled = true; };
+  }, [onError]);
+
+  const loadPage = useCallback(
+    (offset) => fetchReportLogs({ limit: PAGE_SIZE, offset, ...toRangeParams(appliedFilters), search: appliedFilters.search, user: appliedFilters.user }),
+    [appliedFilters]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    requestId.current += 1;
+    setLoadingMore(false);
 
     async function init() {
       try {
@@ -73,41 +99,46 @@ export default function ReportLogsTab({ onError, currentUserName }) {
   }, [loadPage, onError]);
 
   async function handleLoadMore() {
+    const currentRequest = requestId.current;
     try {
       setLoadingMore(true);
       const response = await loadPage(logs.length);
+      if (currentRequest !== requestId.current) return;
       setLogs((prev) => [...prev, ...(response.logs || [])]);
       setTotal(response.total || 0);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "No se pudo cargar mas registros.");
+      if (currentRequest === requestId.current) onError(err instanceof Error ? err.message : "No se pudo cargar mas registros.");
     } finally {
-      setLoadingMore(false);
+      if (currentRequest === requestId.current) setLoadingMore(false);
     }
   }
 
-  async function handleExport({ from, to }) {
+  async function handleExport(format) {
     try {
       setExporting(true);
-      const rangeParams = toRangeParams({ from, to });
-      const items = await fetchAllPages(fetchReportLogs, rangeParams, (response) => response.logs);
+      const selectedFilters = { ...filters, search: filters.search.trim(), user: filters.user.trim() };
+      const items = await fetchAllPages(fetchReportLogs, {
+        ...toRangeParams(selectedFilters), search: selectedFilters.search, user: selectedFilters.user,
+      }, (response) => response.logs);
 
-      exportLogsToPdf({
-        title: "Historial de generacion de reportes",
-        columns: EXPORT_COLUMNS,
-        rows: items.map((log) => ({
+      const rows = items.map((log) => ({
           userName: log.userName || log.userEmail || "-",
           createdAt: formatDateTime(log.createdAt),
           sensorName: log.sensorName || "-",
           reportTypeLabel: log.reportTypeLabel || log.reportType || "-",
           rangeLabel: log.rangeLabel || "-",
           observations: log.observations || "Sin observaciones",
-        })),
-        rangeLabel: buildRangeLabel({ from, to }),
-        generatedBy: currentUserName,
-        fileName: "historial_reportes.pdf",
-      });
+      }));
 
-      setExportOpen(false);
+      if (format === "excel") {
+        await exportLogsToExcel({ title: "Reportes generados", columns: EXPORT_COLUMNS, rows, fileName: "historial_reportes.xlsx" });
+      } else {
+        exportLogsToPdf({
+          title: "Historial de generacion de reportes", columns: EXPORT_COLUMNS, rows,
+          rangeLabel: buildRangeLabel(selectedFilters), generatedBy: currentUserName,
+          fileName: "historial_reportes.pdf",
+        });
+      }
     } catch (err) {
       onError(err instanceof Error ? err.message : "No se pudo exportar el historial.");
     } finally {
@@ -115,25 +146,28 @@ export default function ReportLogsTab({ onError, currentUserName }) {
     }
   }
 
-  const hasMore = logs.length < total;
+  const hasMore = logs.length < total && !loading;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Reportes generados ({total})</h2>
-        <button
-          onClick={() => setExportOpen(true)}
-          className="flex items-center gap-2 rounded-md bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600"
-        >
-          <FileDown size={16} />
-          Exportar PDF
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => handleExport("pdf")} disabled={exporting || invalidRange} className="flex items-center gap-2 rounded-md bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600 disabled:opacity-60">
+            <FileDown size={16} /> Exportar PDF
+          </button>
+          <button onClick={() => handleExport("excel")} disabled={exporting || invalidRange} className="flex items-center gap-2 rounded-md bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600 disabled:opacity-60">
+            <Sheet size={16} /> Exportar XLS
+          </button>
+        </div>
       </div>
+
+      <LogsFilters filters={filters} onChange={setFilters} extraLabel="Usuario" extraKey="user" extraOptions={users} invalidRange={invalidRange} />
 
       {loading ? (
         <p className="text-gray-400">Cargando historial...</p>
       ) : logs.length === 0 ? (
-        <p className="text-gray-400">Aun no hay reportes registrados.</p>
+        <p className="text-gray-400">No hay reportes para los filtros seleccionados.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -205,7 +239,7 @@ export default function ReportLogsTab({ onError, currentUserName }) {
         <div className="flex justify-center pt-2">
           <button
             onClick={handleLoadMore}
-            disabled={loadingMore}
+            disabled={loadingMore || loading}
             className="rounded-md bg-gray-700 hover:bg-gray-600 disabled:opacity-60 px-4 py-2 text-sm"
           >
             {loadingMore ? "Cargando..." : "Cargar mas"}
@@ -213,13 +247,6 @@ export default function ReportLogsTab({ onError, currentUserName }) {
         </div>
       )}
 
-      <ExportRangeModal
-        open={exportOpen}
-        title="Exportar historial de reportes"
-        busy={exporting}
-        onCancel={() => setExportOpen(false)}
-        onConfirm={handleExport}
-      />
     </div>
   );
 }
